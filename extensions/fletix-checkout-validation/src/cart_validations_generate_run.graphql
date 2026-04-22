@@ -1,0 +1,41 @@
+query CartValidationsGenerateRunInput {
+  cart {
+    lines {
+      id
+      quantity
+      attribute(key: "_mox_service_code") {
+        key
+        value
+      }
+      deptAttribute: attribute(key: "_mox_department") {
+        key
+        value
+      }
+      cityAttribute: attribute(key: "_mox_city") {
+        key
+        value
+      }
+      merchandise {
+        ... on ProductVariant {
+          id
+          product {
+            id
+            title
+          }
+        }
+      }
+    }
+    deliveryGroups {
+      deliveryAddress {
+        provinceCode
+        countryCode
+        city
+      }
+    }
+  }
+  shop {
+    metafield(namespace: "mox_store_promise", key: "shipping_rules") {
+      value
+    }
+  }
+}

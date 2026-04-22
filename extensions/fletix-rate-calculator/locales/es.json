@@ -1,0 +1,14 @@
+{
+  "rate_calculator": {
+    "title": "Calculadora de envío",
+    "department_label": "Departamento",
+    "department_placeholder": "Selecciona departamento...",
+    "city_label": "Ciudad",
+    "city_placeholder": "Escribe tu ciudad...",
+    "calculate_button": "Calcular envío",
+    "calculating": "Calculando...",
+    "no_rates": "No hay opciones de envío disponibles para este destino.",
+    "free": "Gratis",
+    "error": "No se pudo calcular el envío. Intenta de nuevo."
+  }
+}

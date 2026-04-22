@@ -1,0 +1,80 @@
+// This is your Prisma schema file,
+// learn more about it in the docs: https://pris.ly/d/prisma-schema
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = "file:dev.sqlite"
+}
+
+/// Una fila por tienda que instala la app. `sponsoredPro` = Pro sin suscripción Shopify (solo BD / admin).
+model AppShop {
+  shop           String   @id
+  sponsoredPro   Boolean  @default(false)
+  note           String?
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+}
+
+model Session {
+  id            String    @id
+  shop          String
+  state         String
+  isOnline      Boolean   @default(false)
+  scope         String?
+  expires       DateTime?
+  accessToken   String
+  userId        BigInt?
+  firstName     String?
+  lastName      String?
+  email         String?
+  accountOwner  Boolean   @default(false)
+  locale        String?
+  collaborator  Boolean?  @default(false)
+  emailVerified Boolean?  @default(false)
+  refreshToken        String?
+  refreshTokenExpires DateTime?
+
+  @@index([shop])
+}
+
+model ShippingZone {
+  id         String         @id @default(cuid())
+  shop       String
+  department String          // "Antioquia", "Bogotá D.C."
+  slug       String          // "antioquia", "bogota_d_c"
+  enabled    Boolean        @default(true)
+  rates      ShippingRate[]
+  createdAt  DateTime       @default(now())
+  updatedAt  DateTime       @updatedAt
+
+  @@unique([shop, slug])
+}
+
+model ShippingRate {
+  id            String       @id @default(cuid())
+  zoneId        String
+  zone          ShippingZone @relation(fields: [zoneId], references: [id], onDelete: Cascade)
+  name          String       // "Envío Express", "Envío Estándar"
+  serviceCode   String       // "mox_express", "mox_envio"
+  price         Int          // COP enteros: 12000
+  description   String       @default("")
+  cityCondition String       @default("all") // "all" | "include" | "exclude"
+  cities        String       @default("[]")  // JSON array: '["MEDELLÍN","BELLO"]'
+  timeFrom      String?      // "08:00" — hora inicio (Colombia UTC-5), null = sin restricción
+  timeTo        String?      // "13:00" — hora fin, null = sin restricción
+  daysOfWeek    String       @default("[]") // JSON array: '["mon","tue","wed","thu","fri"]', [] = todos
+  productCondition String     @default("all")   // "all" | "include_tags" | "exclude_tags"
+  productTags      String     @default("[]")    // JSON array: '["fragil","pesado"]'
+  pricingMode     String       @default("flat")  // "flat" | "weight_tiers" | "cart_total"
+  weightTiers     String       @default("[]")    // JSON: [{"minKg":0,"maxKg":1,"price":12000},...]
+  cartTotalTiers  String       @default("[]")    // JSON: [{"minAmount":0,"maxAmount":100000,"price":12000},...]
+  enabled       Boolean      @default(true)
+  createdAt     DateTime     @default(now())
+  updatedAt     DateTime     @updatedAt
+
+  @@index([zoneId])
+}

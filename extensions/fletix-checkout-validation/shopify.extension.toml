@@ -1,0 +1,17 @@
+api_version = "2026-04"
+
+[[extensions]]
+name = "Fletix: Validación de Checkout"
+handle = "fletix-checkout-validation"
+uid = "f00a0d81-d1e2-6227-babc-645e5af68a75320f4e43"
+type = "function"
+description = "Bloquea el checkout si un producto del carrito no está disponible para la dirección ingresada con el método de envío seleccionado."
+
+  [[extensions.targeting]]
+  target = "cart.validations.generate.run"
+  input_query = "src/cart_validations_generate_run.graphql"
+  export = "cart-validations-generate-run"
+
+  [extensions.build]
+  command = ""
+  path = "dist/function.wasm"

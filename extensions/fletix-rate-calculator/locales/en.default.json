@@ -1,0 +1,14 @@
+{
+  "rate_calculator": {
+    "title": "Shipping Calculator",
+    "department_label": "Department",
+    "department_placeholder": "Select department...",
+    "city_label": "City",
+    "city_placeholder": "Enter your city...",
+    "calculate_button": "Calculate shipping",
+    "calculating": "Calculating...",
+    "no_rates": "No shipping options available for this destination.",
+    "free": "Free",
+    "error": "Could not calculate shipping. Please try again."
+  }
+}

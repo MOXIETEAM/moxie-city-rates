@@ -1,0 +1,51 @@
+# Dependencies
+node_modules/
+
+# Build / bundler
+/build/
+/dist/
+.vite/
+*.tsbuildinfo
+
+# React Router (tipos y artefactos generados)
+.react-router/
+
+# Prisma — base local de desarrollo (las migraciones sí se versionan)
+/prisma/dev.sqlite
+/prisma/dev.sqlite-journal
+/prisma/*.db
+/prisma/*.db-journal
+
+# Variables de entorno (no subir secretos)
+.env
+.env.*
+!.env.example
+
+# Shopify CLI (túneles, estado local)
+.shopify/
+.shopify.lock
+
+# Extensiones: artefactos de build por workspace
+/extensions/*/dist/
+/extensions/*/node_modules/
+
+# Cachés y herramientas
+.cache/
+.eslintcache
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+coverage/
+.nyc_output/
+
+# Sistema operativo
+.DS_Store
+Thumbs.db
+
+# Editores / IDE (ajustes personales; descomenta si no quieres versionar .vscode compartido)
+.idea/
+*.swp
+*.swo
+*~

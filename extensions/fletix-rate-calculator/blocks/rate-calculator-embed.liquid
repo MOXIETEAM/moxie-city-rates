@@ -1,0 +1,138 @@
+{{ 'rate-calculator.css' | asset_url | stylesheet_tag }}
+
+{% assign locale = request.locale.iso_code | default: 'es' %}
+{% assign proxy_path = '/apps/fletix/api/rate-calculator' %}
+
+<template id="fletix-embed-tpl">
+  <div
+    class="fletix-calc fletix-calc--embed"
+    data-fletix-calculator
+    data-api-url="{{ proxy_path }}"
+    data-shop="{{ shop.permanent_domain }}"
+    data-locale="{{ locale }}"
+  >
+    <button class="fletix-calc__toggle" type="button">
+      <span>📦 {% if locale == 'es' %}Calcular envío{% else %}Calculate shipping{% endif %}</span>
+      <span class="fletix-calc__toggle-icon">▼</span>
+    </button>
+
+    <div class="fletix-calc__body">
+      <div class="fletix-calc__body-inner">
+        <div class="fletix-calc__form">
+          <div class="fletix-calc__row">
+            <div class="fletix-calc__field">
+              <label class="fletix-calc__label">
+                {% if locale == 'es' %}Departamento{% else %}Department{% endif %}
+              </label>
+              <select class="fletix-calc__select">
+                <option value="">{% if locale == 'es' %}Depto...{% else %}Dept...{% endif %}</option>
+              </select>
+            </div>
+            <div class="fletix-calc__field">
+              <label class="fletix-calc__label">
+                {% if locale == 'es' %}Ciudad{% else %}City{% endif %}
+              </label>
+              <input
+                class="fletix-calc__input"
+                type="text"
+                placeholder="{% if locale == 'es' %}Ciudad...{% else %}City...{% endif %}"
+                autocomplete="off"
+              />
+            </div>
+          </div>
+          <button class="fletix-calc__btn" type="button">
+            {% if locale == 'es' %}Calcular{% else %}Calculate{% endif %}
+          </button>
+        </div>
+        <div class="fletix-calc__results"></div>
+      </div>
+    </div>
+  </div>
+</template>
+
+<script>
+  (function() {
+    var tpl = document.getElementById('fletix-embed-tpl');
+    if (!tpl) return;
+
+    var widget = null;
+    var injected = false;
+
+    function getCheckoutBtn() {
+      return document.querySelector('#CartDrawer-Checkout')
+        || document.querySelector('button[name="checkout"]')
+        || document.querySelector('.cart__checkout-button');
+    }
+
+    function isDrawerOpen() {
+      var btn = getCheckoutBtn();
+      if (!btn) return false;
+      var rect = btn.getBoundingClientRect();
+      return rect.width > 10 && rect.height > 10;
+    }
+
+    function inject() {
+      if (injected) return;
+
+      var btn = getCheckoutBtn();
+      if (!btn) return;
+
+      var drawer = btn.closest('cart-drawer') || btn.closest('#CartDrawer') || btn.closest('.cart-drawer');
+      if (!drawer) return;
+
+      var itemsContainer = drawer.querySelector('.cart-drawer__items')
+        || drawer.querySelector('.drawer__contents')
+        || drawer.querySelector('.cart-items');
+
+      widget = tpl.content.firstElementChild.cloneNode(true);
+
+      if (itemsContainer) {
+        itemsContainer.parentElement.insertBefore(widget, itemsContainer);
+      } else {
+        var heading = drawer.querySelector('h2');
+        if (heading && heading.nextElementSibling) {
+          heading.parentElement.insertBefore(widget, heading.nextElementSibling);
+        } else {
+          drawer.insertBefore(widget, drawer.children[1] || null);
+        }
+      }
+
+      injected = true;
+    }
+
+    function check() {
+      if (!injected) {
+        inject();
+      }
+
+      if (!widget) return;
+
+      if (isDrawerOpen()) {
+        widget.style.display = '';
+      } else {
+        widget.style.display = 'none';
+      }
+    }
+
+    new MutationObserver(function() {
+      requestAnimationFrame(check);
+    }).observe(document.body, {
+      childList: true,
+      subtree: true,
+      attributes: true,
+      attributeFilter: ['class', 'open', 'aria-hidden', 'style']
+    });
+
+    setInterval(check, 800);
+  })();
+</script>
+
+<script src="{{ 'rate-calculator.js' | asset_url }}" defer></script>
+
+{% schema %}
+{
+  "name": "Fletix calc. carrito",
+  "target": "body",
+  "settings": []
+}
+{% endschema %}

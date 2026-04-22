@@ -1,0 +1,4 @@
+{
+  "name": "Fletix: Checkout Validation",
+  "description": "Blocks checkout when a cart item is not available for the entered address with the selected shipping method."
+}

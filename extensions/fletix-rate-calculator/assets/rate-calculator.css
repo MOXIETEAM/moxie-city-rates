@@ -1,0 +1,257 @@
+.fletix-calc {
+  --fletix-primary: #2563eb;
+  --fletix-primary-hover: #1d4ed8;
+  --fletix-bg: #f8fafc;
+  --fletix-border: #e2e8f0;
+  --fletix-text: #1e293b;
+  --fletix-text-light: #64748b;
+  --fletix-success: #059669;
+  --fletix-radius: 8px;
+  font-family: inherit;
+  max-width: 100%;
+}
+
+/* === Section mode (product page, full cart page) === */
+.fletix-calc--section .fletix-calc__title {
+  font-size: 16px;
+  font-weight: 700;
+  margin: 0 0 16px;
+  color: var(--fletix-text);
+}
+
+.fletix-calc--section .fletix-calc__form {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.fletix-calc--section .fletix-calc__field {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+/* === Embed / drawer mode (compact, accordion) === */
+.fletix-calc--embed {
+  border-bottom: 1px solid var(--fletix-border);
+  padding: 8px 16px 10px;
+  margin-bottom: 0;
+  width: 100%;
+  box-sizing: border-box;
+}
+
+.fletix-calc__toggle {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  width: 100%;
+  background: none;
+  border: none;
+  padding: 6px 0;
+  cursor: pointer;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--fletix-text);
+  font-family: inherit;
+}
+
+.fletix-calc__toggle-icon {
+  transition: transform 0.2s;
+  font-size: 11px;
+  color: var(--fletix-text-light);
+}
+
+.fletix-calc__toggle-icon--open {
+  transform: rotate(180deg);
+}
+
+.fletix-calc__body {
+  overflow: hidden;
+  max-height: 0;
+  transition: max-height 0.25s ease;
+}
+
+.fletix-calc__body--open {
+  max-height: 500px;
+}
+
+.fletix-calc__body-inner {
+  padding: 10px 0 4px;
+}
+
+.fletix-calc--embed .fletix-calc__form {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.fletix-calc--embed .fletix-calc__row {
+  display: flex;
+  gap: 8px;
+}
+
+.fletix-calc--embed .fletix-calc__row > * {
+  flex: 1;
+  min-width: 0;
+}
+
+.fletix-calc--embed .fletix-calc__field {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+/* === Shared input styles === */
+.fletix-calc__label {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--fletix-text-light);
+  text-transform: uppercase;
+  letter-spacing: 0.3px;
+}
+
+.fletix-calc__select,
+.fletix-calc__input {
+  padding: 8px 10px;
+  border: 1px solid var(--fletix-border);
+  border-radius: var(--fletix-radius);
+  font-size: 13px;
+  color: var(--fletix-text);
+  background: #fff;
+  appearance: none;
+  transition: border-color 0.15s;
+  width: 100%;
+  box-sizing: border-box;
+}
+
+.fletix-calc__select:focus,
+.fletix-calc__input:focus {
+  outline: none;
+  border-color: var(--fletix-primary);
+  box-shadow: 0 0 0 2px rgba(37, 99, 235, 0.08);
+}
+
+.fletix-calc__select {
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='10' viewBox='0 0 12 12'%3E%3Cpath fill='%2364748b' d='M6 8L1 3h10z'/%3E%3C/svg%3E");
+  background-repeat: no-repeat;
+  background-position: right 10px center;
+  padding-right: 28px;
+}
+
+.fletix-calc__btn {
+  padding: 9px 16px;
+  border: none;
+  border-radius: var(--fletix-radius);
+  background: var(--fletix-primary);
+  color: #fff;
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background 0.15s;
+  width: 100%;
+}
+
+.fletix-calc__btn:hover:not(:disabled) {
+  background: var(--fletix-primary-hover);
+}
+
+.fletix-calc__btn:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+/* === Results === */
+.fletix-calc__results {
+  margin-top: 10px;
+}
+
+.fletix-calc__cart-info {
+  font-size: 11px;
+  color: var(--fletix-text-light);
+  padding: 6px 10px;
+  background: var(--fletix-bg);
+  border: 1px solid var(--fletix-border);
+  border-radius: var(--fletix-radius);
+  margin-bottom: 6px;
+  text-align: center;
+}
+
+.fletix-calc__rate {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 8px 10px;
+  border-radius: var(--fletix-radius);
+  background: var(--fletix-bg);
+  border: 1px solid var(--fletix-border);
+  margin-bottom: 6px;
+}
+
+.fletix-calc__rate:last-child {
+  margin-bottom: 0;
+}
+
+.fletix-calc__rate-info {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+
+.fletix-calc__rate-name {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--fletix-text);
+}
+
+.fletix-calc__rate-desc {
+  font-size: 11px;
+  color: var(--fletix-text-light);
+}
+
+.fletix-calc__rate-price {
+  font-size: 14px;
+  font-weight: 700;
+  color: var(--fletix-text);
+  white-space: nowrap;
+  margin-left: 12px;
+}
+
+.fletix-calc__rate-price--free {
+  color: var(--fletix-success);
+}
+
+.fletix-calc__empty,
+.fletix-calc__error {
+  padding: 8px 10px;
+  border-radius: var(--fletix-radius);
+  font-size: 12px;
+  text-align: center;
+}
+
+.fletix-calc__empty {
+  background: var(--fletix-bg);
+  color: var(--fletix-text-light);
+  border: 1px solid var(--fletix-border);
+}
+
+.fletix-calc__error {
+  background: #fef2f2;
+  color: #dc2626;
+  border: 1px solid #fecaca;
+}
+
+.fletix-calc__spinner {
+  display: inline-block;
+  width: 14px;
+  height: 14px;
+  border: 2px solid rgba(255, 255, 255, 0.3);
+  border-top-color: #fff;
+  border-radius: 50%;
+  animation: fletix-spin 0.6s linear infinite;
+  vertical-align: middle;
+  margin-right: 6px;
+}
+
+@keyframes fletix-spin {
+  to { transform: rotate(360deg); }
+}
