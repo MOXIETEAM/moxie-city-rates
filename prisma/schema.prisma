@@ -6,8 +6,8 @@ generator client {
 }
 
 datasource db {
-  provider = "sqlite"
-  url      = "file:dev.sqlite"
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
 }
 
 /// Una fila por tienda que instala la app. `sponsoredPro` = Pro sin suscripción Shopify (solo BD / admin).
