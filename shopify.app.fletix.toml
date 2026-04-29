@@ -2,7 +2,7 @@
 
 client_id = "8c228546203c5dd03577b1b608bd1075"
 name = "Fletix"
-application_url = "https://example.com"
+application_url = "https://moxie-city-rates-test.onrender.com"
 embedded = true
 
 [build]
@@ -29,12 +29,12 @@ api_version = "2026-07"
 scopes = "read_shipping,write_shipping"
 
 [auth]
-redirect_urls = [ "https://example.com/api/auth" ]
+redirect_urls = [ "https://moxie-city-rates-test.onrender.com/api/auth" ]
 
 [app_proxy]
-url = "https://example.com"
+url = "https://moxie-city-rates-test.onrender.com"
 subpath = "fletix"
 prefix = "apps"
 
 [app_preferences]
-url = "https://example.com/app"
+url = "https://moxie-city-rates-test.onrender.com/app"
