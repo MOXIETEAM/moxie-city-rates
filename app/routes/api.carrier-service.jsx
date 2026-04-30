@@ -14,7 +14,7 @@
  */
 
 import { getRatesForDestination, resolveCity, getZoneDefinedServiceCodes } from "../mox-shipping-rules.server";
-import { debug, info } from "../utils/logger.server";
+import { debug, info, error as logError } from "../utils/logger.server";
 import { unauthenticated } from "../shopify.server";
 import prisma from "../db.server";
 import { verifyCarrierServiceCallbackHmac } from "../utils/shopify-hmac.server";
@@ -330,7 +330,7 @@ export const action = async ({ request }) => {
     const shop = url.searchParams.get("shop");
 
     if (!shop) {
-      console.error("[carrier-service] No shop param in callback URL");
+      logError("[carrier-service] No shop param in callback URL");
       return Response.json({ rates: [] });
     }
 
@@ -338,11 +338,11 @@ export const action = async ({ request }) => {
     const hmac = request.headers.get("X-Shopify-Hmac-Sha256");
     const secret = process.env.SHOPIFY_API_SECRET || "";
     if (!secret) {
-      console.error("[carrier-service] SHOPIFY_API_SECRET is not configured");
+      logError("[carrier-service] SHOPIFY_API_SECRET is not configured");
       return Response.json({ rates: [] }, { status: 500 });
     }
     if (!verifyCarrierServiceCallbackHmac(rawBody, hmac, secret)) {
-      console.error("[carrier-service] Invalid or missing HMAC for shop param", shop);
+      logError("[carrier-service] Invalid or missing HMAC for shop param", shop);
       return Response.json({ rates: [] }, { status: 401 });
     }
 
@@ -350,13 +350,13 @@ export const action = async ({ request }) => {
     try {
       body = JSON.parse(rawBody || "{}");
     } catch {
-      console.error("[carrier-service] Invalid JSON body");
+      logError("[carrier-service] Invalid JSON body");
       return Response.json({ rates: [] }, { status: 400 });
     }
     const destination = body?.rate?.destination;
 
     if (!destination) {
-      console.error("[carrier-service] No destination in payload");
+      logError("[carrier-service] No destination in payload");
       return Response.json({ rates: [] });
     }
 
@@ -484,7 +484,7 @@ export const action = async ({ request }) => {
 
     return Response.json({ rates });
   } catch (err) {
-    console.error("[carrier-service] Error:", err);
+    logError("[carrier-service] Error:", err);
     return Response.json({ rates: [] });
   }
 };

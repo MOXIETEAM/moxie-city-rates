@@ -42,14 +42,18 @@ model Session {
 }
 
 model ShippingZone {
-  id         String         @id @default(cuid())
-  shop       String
-  department String          // "Antioquia", "Bogotá D.C."
-  slug       String          // "antioquia", "bogota_d_c"
-  enabled    Boolean        @default(true)
-  rates      ShippingRate[]
-  createdAt  DateTime       @default(now())
-  updatedAt  DateTime       @updatedAt
+  id              String         @id @default(cuid())
+  shop            String
+  department      String          // "Antioquia", "Bogotá D.C."
+  slug            String          // "antioquia", "bogota_d_c"
+  enabled         Boolean        @default(true)
+  // JSON array of service codes available in this zone — derived from Shopify Locations
+  // at zone creation, then editable by the merchant. Defaults to all 3 to preserve legacy
+  // behavior on rows created before this column existed.
+  enabledServices String         @default("[\"mox_envio\",\"mox_express\",\"mox_pickup\"]")
+  rates           ShippingRate[]
+  createdAt       DateTime       @default(now())
+  updatedAt       DateTime       @updatedAt
 
   @@unique([shop, slug])
 }

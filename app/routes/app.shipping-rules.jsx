@@ -11,9 +11,12 @@ import {
   deleteRate,
   syncRulesToMetafield,
   getOrCreateDefaultZone,
+  updateZoneEnabledServices,
 } from "../mox-shipping-rules.server";
 import { createTranslator, getLocale } from "../utils/i18n";
-import { debug } from "../utils/logger.server";
+import { debug, error as logError } from "../utils/logger.server";
+import { ensureFletixCarrierService } from "../utils/carrier-service.server";
+import { detectEnabledServicesForDepartment } from "../utils/locations.server";
 import { getShopPlan, checkLimit } from "../utils/billing.server";
 import prisma from "../db.server";
 
@@ -223,9 +226,26 @@ export const action = async ({ request }) => {
         return { error: t("billing.limit_zones", { max: planInfo.limits.maxZones }) };
       }
 
-      await createZone(session.shop, department);
+      // Auto-detect which services make sense for this department based on the
+      // merchant's Shopify Locations. Falls back to all services on any failure.
+      const enabledServices = await detectEnabledServicesForDepartment(admin, department);
+
+      await createZone(session.shop, department, enabledServices);
       await syncRulesToMetafield(admin, session.shop);
       return { success: true, message: t("action.zone_created", { dept: department }) };
+    }
+
+    if (intent === "update_zone_services") {
+      const zoneId = formData.get("zoneId");
+      const services = formData.getAll("enabledServices").filter((s) =>
+        VALID_SERVICE_CODES.has(s),
+      );
+      if (services.length === 0) {
+        return { error: t("action.zone_services_empty") };
+      }
+      await updateZoneEnabledServices(session.shop, zoneId, services);
+      await syncRulesToMetafield(admin, session.shop);
+      return { success: true, message: t("action.zone_services_updated") };
     }
 
     if (intent === "delete_zone") {
@@ -318,78 +338,15 @@ export const action = async ({ request }) => {
     }
 
     if (intent === "register_carrier") {
-      const appUrl = process.env.SHOPIFY_APP_URL || process.env.HOST || "https://example.com";
-      const callbackUrl = `${appUrl}/api/carrier-service?shop=${session.shop}`;
-
-      debug(`[carrier] Registering carrier service → ${callbackUrl}`);
-      debug(`[carrier] SHOPIFY_APP_URL=${process.env.SHOPIFY_APP_URL}, HOST=${process.env.HOST}`);
-
-      const checkRes = await admin.graphql(`
-        query { carrierServices(first: 10) { nodes { id name active callbackUrl } } }
-      `);
-      const checkJson = await checkRes.json();
-      const existing = checkJson.data?.carrierServices?.nodes || [];
-
-      debug(`[carrier] Existing carrier services:`, JSON.stringify(existing, null, 2));
-
-      const fletixCarrier = existing.find((c) => c.name === "Fletix");
-
-      if (fletixCarrier) {
-        debug(`[carrier] Found existing carrier "${fletixCarrier.name}" (${fletixCarrier.id}), updating...`);
-        const updateRes = await admin.graphql(`
-          mutation carrierServiceUpdate($input: DeliveryCarrierServiceUpdateInput!) {
-            carrierServiceUpdate(input: $input) {
-              carrierService { id name active callbackUrl }
-              userErrors { field message }
-            }
-          }
-        `, {
-          variables: {
-            input: {
-              id: fletixCarrier.id,
-              callbackUrl,
-              active: true,
-            },
-          },
-        });
-        const updateJson = await updateRes.json();
-        debug(`[carrier] Update response:`, JSON.stringify(updateJson.data, null, 2));
-        const errors = updateJson.data?.carrierServiceUpdate?.userErrors || [];
-        if (errors.length > 0) {
-          console.error(`[carrier] Update errors:`, errors);
-          return { error: errors.map((e) => e.message).join(", ") };
-        }
-        return { success: true, message: t("action.carrier_updated") };
+      const result = await ensureFletixCarrierService(admin, session.shop);
+      if (result.errors?.length) {
+        return { error: result.errors.join(", ") };
       }
-
-      debug(`[carrier] No existing carrier found, creating new...`);
-      const createRes = await admin.graphql(`
-        mutation carrierServiceCreate($input: DeliveryCarrierServiceCreateInput!) {
-          carrierServiceCreate(input: $input) {
-            carrierService { id name active }
-            userErrors { field message }
-          }
-        }
-      `, {
-        variables: {
-          input: {
-            name: "Fletix",
-            callbackUrl,
-            active: true,
-            supportsServiceDiscovery: true,
-          },
-        },
-      });
-
-      const createJson = await createRes.json();
-      debug(`[carrier] Create response:`, JSON.stringify(createJson.data, null, 2));
-      const errors = createJson.data?.carrierServiceCreate?.userErrors || [];
-      if (errors.length > 0) {
-        console.error(`[carrier] Create errors:`, errors);
-        return { error: errors.map((e) => e.message).join(", ") };
-      }
-
-      return { success: true, message: t("action.carrier_registered") };
+      const message =
+        result.status === "created"
+          ? t("action.carrier_registered")
+          : t("action.carrier_updated");
+      return { success: true, message };
     }
 
     if (intent === "upload_csv") {
@@ -454,7 +411,7 @@ export const action = async ({ request }) => {
 
     return { error: t("action.unexpected_error") };
   } catch (err) {
-    console.error(`[shipping-rules] Error (${intent}):`, err);
+    logError(`[shipping-rules] Error (${intent}):`, err);
     return { error: err?.message || t("action.unexpected_error") };
   }
 };
@@ -801,7 +758,14 @@ function ProFeatureNotice({ t }) {
   );
 }
 
-function RateForm({ rate, zoneId, department, onCancel, t, planLimits }) {
+function RateForm({ rate, zoneId, department, onCancel, t, planLimits, enabledServices }) {
+  const allowedServices = Array.isArray(enabledServices) && enabledServices.length > 0
+    ? enabledServices
+    : ["mox_envio", "mox_express", "mox_pickup"];
+  const availableServiceCodes = getServiceCodes(t).filter((sc) =>
+    allowedServices.includes(sc.value),
+  );
+  const fallbackService = availableServiceCodes[0]?.value || "mox_envio";
   const fetcher = useFetcher();
   const [cityCondition, setCityCondition] = useState(rate?.cityCondition || "all");
   const [selectedCities, setSelectedCities] = useState(
@@ -887,10 +851,10 @@ function RateForm({ rate, zoneId, department, onCancel, t, planLimits }) {
             </label>
             <select
               name="serviceCode"
-              defaultValue={rate?.serviceCode || "mox_envio"}
+              defaultValue={rate?.serviceCode && allowedServices.includes(rate.serviceCode) ? rate.serviceCode : fallbackService}
               style={{ padding: "8px 12px", borderRadius: "8px", border: "1px solid #ccc", minWidth: "160px" }}
             >
-              {getServiceCodes(t).map((sc) => (
+              {availableServiceCodes.map((sc) => (
                 <option key={sc.value} value={sc.value}>{sc.label}</option>
               ))}
             </select>
@@ -1148,7 +1112,7 @@ function RateForm({ rate, zoneId, department, onCancel, t, planLimits }) {
   );
 }
 
-function RateCard({ rate, zoneId, department, t, planInfo }) {
+function RateCard({ rate, zoneId, department, t, planInfo, enabledServices }) {
   const deleteFetcher = useFetcher();
   const [editing, setEditing] = useState(false);
   const isDeleting = deleteFetcher.state !== "idle";
@@ -1186,6 +1150,7 @@ function RateCard({ rate, zoneId, department, t, planInfo }) {
           onCancel={() => setEditing(false)}
           t={t}
           planLimits={planInfo.limits}
+          enabledServices={enabledServices}
         />
       </s-card>
     );
@@ -1266,17 +1231,110 @@ function RateCard({ rate, zoneId, department, t, planInfo }) {
   );
 }
 
+function ZoneServicesEditor({ zone, enabledServices, t }) {
+  const fetcher = useFetcher();
+  const [open, setOpen] = useState(false);
+  const [draft, setDraft] = useState(enabledServices);
+  const isSaving = fetcher.state !== "idle";
+
+  useEffect(() => {
+    if (!isSaving && fetcher.data?.success) {
+      setOpen(false);
+    }
+  }, [isSaving, fetcher.data]);
+
+  const allCodes = getServiceCodes(t);
+  const labels = enabledServices
+    .map((code) => allCodes.find((c) => c.value === code)?.label || code)
+    .join(" · ");
+
+  const toggle = (code) => {
+    setDraft((prev) =>
+      prev.includes(code) ? prev.filter((c) => c !== code) : [...prev, code],
+    );
+  };
+
+  if (!open) {
+    return (
+      <div style={{
+        display: "flex", alignItems: "center", justifyContent: "space-between",
+        gap: 12, padding: "8px 12px", borderRadius: 8,
+        background: "#f6f6f7", border: "1px solid #e3e3e3", fontSize: 12,
+      }}>
+        <span>
+          <strong>{t("shipping.zone_services_label")}:</strong> {labels || "—"}
+        </span>
+        <s-button variant="tertiary" size="small" onClick={() => { setDraft(enabledServices); setOpen(true); }}>
+          {t("shipping.zone_services_edit")}
+        </s-button>
+      </div>
+    );
+  }
+
+  return (
+    <fetcher.Form method="post">
+      <input type="hidden" name="_intent" value="update_zone_services" />
+      <input type="hidden" name="zoneId" value={zone.id} />
+      {draft.map((code) => (
+        <input key={code} type="hidden" name="enabledServices" value={code} />
+      ))}
+      <div style={{
+        display: "flex", flexDirection: "column", gap: 10,
+        padding: "12px 14px", borderRadius: 8,
+        background: "#fff", border: "1px solid #d0d4d9",
+      }}>
+        <s-text variant="headingSm">{t("shipping.zone_services_title")}</s-text>
+        <s-text variant="bodySm" tone="subdued">{t("shipping.zone_services_desc")}</s-text>
+        <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+          {allCodes.map((sc) => (
+            <label key={sc.value} style={{ display: "flex", alignItems: "center", gap: 8, cursor: "pointer", fontSize: 13 }}>
+              <input
+                type="checkbox"
+                checked={draft.includes(sc.value)}
+                onChange={() => toggle(sc.value)}
+              />
+              {sc.label}
+            </label>
+          ))}
+        </div>
+        {draft.length === 0 && (
+          <s-text variant="bodySm" tone="critical">{t("shipping.zone_services_empty")}</s-text>
+        )}
+        <div style={{ display: "flex", gap: 8 }}>
+          <s-button type="submit" variant="primary" loading={isSaving} disabled={draft.length === 0}>
+            {t("shipping.zone_services_save")}
+          </s-button>
+          <s-button variant="tertiary" onClick={() => setOpen(false)}>
+            {t("shipping.cancel")}
+          </s-button>
+        </div>
+      </div>
+    </fetcher.Form>
+  );
+}
+
 function ZoneSection({ zone, t, planInfo }) {
   const deleteFetcher = useFetcher();
   const [showAddRate, setShowAddRate] = useState(false);
   const isDeleting = deleteFetcher.state !== "idle";
   const canAddRate = zone.rates.length < planInfo.limits.maxRatesPerZone;
+  const enabledServices = useMemo(() => {
+    try {
+      const parsed = JSON.parse(zone.enabledServices || "[]");
+      return Array.isArray(parsed) && parsed.length > 0
+        ? parsed
+        : ["mox_envio", "mox_express", "mox_pickup"];
+    } catch {
+      return ["mox_envio", "mox_express", "mox_pickup"];
+    }
+  }, [zone.enabledServices]);
 
   return (
     <s-section heading={zone.department}>
       <s-stack direction="block" gap="base">
+        <ZoneServicesEditor zone={zone} enabledServices={enabledServices} t={t} />
         {zone.rates.map((rate) => (
-          <RateCard key={rate.id} rate={rate} zoneId={zone.id} department={zone.department} t={t} planInfo={planInfo} />
+          <RateCard key={rate.id} rate={rate} zoneId={zone.id} department={zone.department} t={t} planInfo={planInfo} enabledServices={enabledServices} />
         ))}
 
         {zone.rates.length === 0 && (
@@ -1293,6 +1351,7 @@ function ZoneSection({ zone, t, planInfo }) {
               onCancel={() => setShowAddRate(false)}
               t={t}
               planLimits={planInfo.limits}
+              enabledServices={enabledServices}
             />
           </s-card>
         ) : (
@@ -1450,7 +1509,15 @@ export default function ShippingRules() {
             {t("shipping.default_desc")}
           </s-text>
           {defaultZone.rates.map((rate) => (
-            <RateCard key={rate.id} rate={rate} zoneId={defaultZone.id} department={defaultZone.department} t={t} planInfo={planInfo} />
+            <RateCard
+              key={rate.id}
+              rate={rate}
+              zoneId={defaultZone.id}
+              department={defaultZone.department}
+              t={t}
+              planInfo={planInfo}
+              enabledServices={["mox_envio", "mox_express", "mox_pickup"]}
+            />
           ))}
           {defaultZone.rates.length === 0 && (
             <div style={{
@@ -1468,6 +1535,7 @@ export default function ShippingRules() {
                 onCancel={() => setShowAddDefault(false)}
                 t={t}
                 planLimits={planInfo.limits}
+                enabledServices={["mox_envio", "mox_express", "mox_pickup"]}
               />
             </s-card>
           ) : (
@@ -1545,31 +1613,42 @@ export default function ShippingRules() {
             </s-box>
           </s-stack>
 
-          <s-stack direction="block" gap="base">
-            <s-text variant="headingSm">{t("shipping.sync_title")}</s-text>
-            <s-text variant="bodySm" tone="subdued">
-              {t("shipping.sync_desc")}
-            </s-text>
-            <syncFetcher.Form method="post">
-              <input type="hidden" name="_intent" value="sync_metafield" />
-              <s-button type="submit" variant="primary" loading={isSyncing}>
-                {isSyncing ? t("shipping.sync_loading") : t("shipping.sync_button")}
-              </s-button>
-            </syncFetcher.Form>
-          </s-stack>
+          <details style={{ marginTop: 8 }}>
+            <summary style={{ cursor: "pointer", padding: "8px 0" }}>
+              <s-text variant="headingSm">{t("shipping.advanced_title")}</s-text>
+            </summary>
+            <s-stack direction="block" gap="base" paddingBlockStart="base">
+              <s-text variant="bodySm" tone="subdued">
+                {t("shipping.advanced_desc")}
+              </s-text>
 
-          <s-stack direction="block" gap="base">
-            <s-text variant="headingSm">{t("shipping.carrier_title")}</s-text>
-            <s-text variant="bodySm" tone="subdued">
-              {t("shipping.carrier_desc")}
-            </s-text>
-            <carrierFetcher.Form method="post">
-              <input type="hidden" name="_intent" value="register_carrier" />
-              <s-button type="submit" variant="secondary" loading={isRegistering}>
-                {isRegistering ? t("shipping.carrier_loading") : t("shipping.carrier_button")}
-              </s-button>
-            </carrierFetcher.Form>
-          </s-stack>
+              <s-stack direction="block" gap="base">
+                <s-text variant="headingSm">{t("shipping.sync_title")}</s-text>
+                <s-text variant="bodySm" tone="subdued">
+                  {t("shipping.sync_desc")}
+                </s-text>
+                <syncFetcher.Form method="post">
+                  <input type="hidden" name="_intent" value="sync_metafield" />
+                  <s-button type="submit" variant="secondary" loading={isSyncing}>
+                    {isSyncing ? t("shipping.sync_loading") : t("shipping.sync_button")}
+                  </s-button>
+                </syncFetcher.Form>
+              </s-stack>
+
+              <s-stack direction="block" gap="base">
+                <s-text variant="headingSm">{t("shipping.carrier_title")}</s-text>
+                <s-text variant="bodySm" tone="subdued">
+                  {t("shipping.carrier_desc")}
+                </s-text>
+                <carrierFetcher.Form method="post">
+                  <input type="hidden" name="_intent" value="register_carrier" />
+                  <s-button type="submit" variant="secondary" loading={isRegistering}>
+                    {isRegistering ? t("shipping.carrier_loading") : t("shipping.carrier_button")}
+                  </s-button>
+                </carrierFetcher.Form>
+              </s-stack>
+            </s-stack>
+          </details>
 
           <s-stack direction="block" gap="base">
             <s-text variant="headingSm">{t("shipping.csv_title")}</s-text>

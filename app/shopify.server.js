@@ -8,6 +8,7 @@ import {
 import { PrismaSessionStorage } from "@shopify/shopify-app-session-storage-prisma";
 import prisma from "./db.server";
 import { ensureShopRecord } from "./utils/shop-record.server";
+import { ensureFletixCarrierService } from "./utils/carrier-service.server";
 import { PLAN_FREE, PLAN_PRO } from "./utils/billing.constants";
 
 export { PLAN_FREE, PLAN_PRO };
@@ -33,15 +34,19 @@ const shopify = shopifyApp({
           interval: BillingInterval.Every30Days,
         },
       ],
-      trialDays: 14,
+      trialDays: 7,
     },
   },
   ...(process.env.SHOP_CUSTOM_DOMAIN
     ? { customShopDomains: [process.env.SHOP_CUSTOM_DOMAIN] }
     : {}),
   hooks: {
-    afterAuth: async ({ session }) => {
+    afterAuth: async ({ session, admin }) => {
       await ensureShopRecord(session.shop);
+      // Best-effort carrier registration so merchant doesn't need to click a button
+      // post-install. Helper never throws — install must succeed even if Shopify
+      // rejects the carrier (e.g. shop on plan without third-party carriers).
+      await ensureFletixCarrierService(admin, session.shop);
     },
   },
 });

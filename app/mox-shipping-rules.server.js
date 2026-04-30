@@ -8,7 +8,7 @@
 
 import prisma from "./db.server";
 import { resolveCity, normalizeCityForRules } from "./utils/city-resolver.server";
-import { debug } from "./utils/logger.server";
+import { debug, warn, error as logError } from "./utils/logger.server";
 
 export { resolveCity };
 
@@ -149,7 +149,26 @@ export async function getRatesForDestination(shop, departmentSlug, city, departm
     ? itemTags.map((t) => t.toLowerCase().trim())
     : null;
 
+  // Honor the zone's enabledServices toggle: rates with a serviceCode the
+  // merchant has disabled for this zone (e.g. legacy pickup rate kept after
+  // pickup was turned off) must not appear at checkout. Default zone bypasses
+  // this filter — it's the catch-all and always offers all 3 methods.
+  let enabledServicesForZone = null;
+  if (zone.slug !== DEFAULT_ZONE_SLUG) {
+    try {
+      const parsed = JSON.parse(zone.enabledServices || "[]");
+      if (Array.isArray(parsed) && parsed.length > 0) {
+        enabledServicesForZone = new Set(parsed);
+      }
+    } catch {
+      // Invalid JSON — fail open (no filter) to avoid hiding rates from a
+      // bad column write. Logger noise here would be high-cardinality, so skip.
+    }
+  }
+
   return zone.rates.filter((rate) => {
+    if (enabledServicesForZone && !enabledServicesForZone.has(rate.serviceCode)) return false;
+
     if (rate.cityCondition !== "all") {
       const cities = JSON.parse(rate.cities || "[]").map((c) => normalizeCityForRules(c, deptName));
       if (rate.cityCondition === "include" && !cities.includes(normalizedCity)) return false;
@@ -189,7 +208,22 @@ export async function getZoneDefinedServiceCodes(shop, departmentSlug) {
     include: { rates: { where: { enabled: true }, select: { serviceCode: true } } },
   });
   if (!zone || !zone.enabled) return empty;
-  return new Set(zone.rates.map((r) => r.serviceCode));
+
+  let enabledServicesForZone = null;
+  try {
+    const parsed = JSON.parse(zone.enabledServices || "[]");
+    if (Array.isArray(parsed) && parsed.length > 0) {
+      enabledServicesForZone = new Set(parsed);
+    }
+  } catch {
+    // Fail open — see getRatesForDestination.
+  }
+
+  return new Set(
+    zone.rates
+      .filter((r) => !enabledServicesForZone || enabledServicesForZone.has(r.serviceCode))
+      .map((r) => r.serviceCode),
+  );
 }
 
 export async function getOrCreateDefaultZone(shop) {
@@ -208,10 +242,24 @@ export async function getOrCreateDefaultZone(shop) {
   return zone;
 }
 
-export async function createZone(shop, department) {
+export async function createZone(shop, department, enabledServices) {
   const slug = toSlug(department);
-  return prisma.shippingZone.create({
-    data: { shop, department, slug },
+  const data = { shop, department, slug };
+  if (Array.isArray(enabledServices) && enabledServices.length > 0) {
+    data.enabledServices = JSON.stringify(enabledServices);
+  }
+  return prisma.shippingZone.create({ data });
+}
+
+export async function updateZoneEnabledServices(shop, zoneId, enabledServices) {
+  if (!Array.isArray(enabledServices) || enabledServices.length === 0) {
+    throw new Error("enabledServices must be a non-empty array");
+  }
+  const zone = await prisma.shippingZone.findFirst({ where: { id: zoneId, shop } });
+  if (!zone) throw new Error("Zone not found or unauthorized");
+  return prisma.shippingZone.update({
+    where: { id: zoneId },
+    data: { enabledServices: JSON.stringify(enabledServices) },
   });
 }
 
@@ -327,11 +375,11 @@ async function ensureFletixMetafieldDefinition(admin) {
     // TAKEN_BY_OTHER significa que ya existe — esperado en deploys subsecuentes.
     const realErrors = errors.filter((e) => e.code !== "TAKEN" && e.code !== "TAKEN_BY_OTHER");
     if (realErrors.length > 0) {
-      console.warn("[shipping-rules] metafieldDefinitionCreate errors:", realErrors);
+      warn("[shipping-rules] metafieldDefinitionCreate errors:", realErrors);
     }
   } catch (err) {
     // No bloqueante: el sync del metafield puede continuar aún sin la definition.
-    console.warn("[shipping-rules] No se pudo crear metafield definition:", err?.message || err);
+    warn("[shipping-rules] No se pudo crear metafield definition:", err?.message || err);
   }
 }
 
@@ -356,8 +404,21 @@ export async function syncRulesToMetafield(admin, shop) {
     if (!zone.enabled) continue;
     rules[zone.slug] = {};
 
+    let enabledServicesForZone = null;
+    if (zone.slug !== DEFAULT_ZONE_SLUG) {
+      try {
+        const parsed = JSON.parse(zone.enabledServices || "[]");
+        if (Array.isArray(parsed) && parsed.length > 0) {
+          enabledServicesForZone = new Set(parsed);
+        }
+      } catch {
+        // Fail open.
+      }
+    }
+
     for (const rate of zone.rates) {
       if (!rate.enabled) continue;
+      if (enabledServicesForZone && !enabledServicesForZone.has(rate.serviceCode)) continue;
       const cities = JSON.parse(rate.cities || "[]").map(normalizeCity);
       const rule = {
         condition: rate.cityCondition,
@@ -408,7 +469,7 @@ export async function syncRulesToMetafield(admin, shop) {
   const data = await res.json();
   const errors = data.data?.metafieldsSet?.userErrors || [];
   if (errors.length > 0) {
-    console.error("[shipping-rules] Metafield errors:", errors);
+    logError("[shipping-rules] Metafield errors:", errors);
     throw new Error(errors.map((e) => e.message).join(", "));
   }
 

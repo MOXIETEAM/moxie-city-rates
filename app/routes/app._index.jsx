@@ -4,6 +4,7 @@ import { authenticate } from "../shopify.server";
 import { createTranslator } from "../utils/i18n";
 import { getShopPlan } from "../utils/billing.server";
 import prisma from "../db.server";
+import { error as logError } from "../utils/logger.server";
 
 /** Detecta si el carrier "Fletix" está registrado y activo en la tienda (Admin API). */
 async function checkFletixCarrierRegistered(admin) {
@@ -19,7 +20,7 @@ async function checkFletixCarrierRegistered(admin) {
     const nodes = json.data?.carrierServices?.nodes ?? [];
     return nodes.some((c) => c.name === "Fletix" && c.active !== false);
   } catch (err) {
-    console.error("[app._index] checkFletixCarrierRegistered:", err);
+    logError("[app._index] checkFletixCarrierRegistered:", err);
     return false;
   }
 }
@@ -295,28 +296,6 @@ export default function Index() {
             </p>
             <p style={{ fontSize: 13, color: "#6d7175", margin: "8px 0 0" }}>{data.shop}</p>
           </div>
-          <a
-            href={data.docsUrl}
-            target="_blank"
-            rel="noopener noreferrer"
-            style={{
-              display: "inline-flex",
-              alignItems: "center",
-              gap: 8,
-              background: ACCENT,
-              color: "#fff",
-              fontWeight: 600,
-              fontSize: 14,
-              padding: "12px 20px",
-              borderRadius: 12,
-              textDecoration: "none",
-              boxShadow: "0 2px 8px rgba(71, 193, 175, 0.35)",
-              whiteSpace: "nowrap",
-            }}
-          >
-            {t("home.docs_cta")}
-            {ICONS.external}
-          </a>
         </div>
 
         {/* Métricas */}

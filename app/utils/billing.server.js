@@ -1,6 +1,7 @@
 import { PLAN_PRO, PLAN_FREE, unauthenticated } from "../shopify.server";
 import prisma from "../db.server";
 import { normalizeShopDomain } from "./shop-record.server";
+import { error as logError } from "./logger.server";
 
 /**
  * Matriz oficial Free vs Pro (debe coincidir con app/routes/app.billing.jsx y la UI).
@@ -45,7 +46,7 @@ export async function isSponsoredProShop(shop) {
     });
     return row?.sponsoredPro === true;
   } catch (e) {
-    console.error("[billing] isSponsoredProShop:", e.message);
+    logError("[billing] isSponsoredProShop:", e.message);
     return false;
   }
 }
@@ -85,7 +86,7 @@ export async function getShopPlan(billing, shop) {
       };
     }
   } catch (e) {
-    console.error("[billing] Error checking plan:", e.message);
+    logError("[billing] Error checking plan:", e.message);
   }
 
   if (shopNorm && (await isSponsoredProShop(shopNorm))) {
@@ -120,7 +121,7 @@ export async function getShopPlanForStorefront(shopDomain) {
     `);
     const json = await response.json();
     if (json.errors?.length) {
-      console.error("[billing] getShopPlanForStorefront GraphQL:", json.errors);
+      logError("[billing] getShopPlanForStorefront GraphQL:", json.errors);
     } else {
       const subs = json.data?.currentAppInstallation?.activeSubscriptions ?? [];
       const activePro = subs.some(
@@ -136,7 +137,7 @@ export async function getShopPlanForStorefront(shopDomain) {
       }
     }
   } catch (e) {
-    console.error("[billing] getShopPlanForStorefront:", e.message);
+    logError("[billing] getShopPlanForStorefront:", e.message);
   }
 
   if (await isSponsoredProShop(shopNorm)) {

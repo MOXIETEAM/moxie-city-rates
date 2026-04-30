@@ -9,35 +9,36 @@
 
 import { authenticate } from "../shopify.server";
 import db from "../db.server";
+import { info } from "../utils/logger.server";
 
 export const action = async ({ request }) => {
   const { shop, topic } = await authenticate.webhook(request);
 
-  console.log(`[compliance] Received ${topic} webhook for ${shop}`);
+  info(`[compliance] Received ${topic} webhook for ${shop}`);
 
   switch (topic) {
     case "CUSTOMERS_DATA_REQUEST":
-      console.log(`[compliance] customers/data_request for ${shop} — no customer data stored`);
+      info(`[compliance] customers/data_request for ${shop} — no customer data stored`);
       break;
 
     case "CUSTOMERS_REDACT":
-      console.log(`[compliance] customers/redact for ${shop} — no customer data to delete`);
+      info(`[compliance] customers/redact for ${shop} — no customer data to delete`);
       break;
 
     case "SHOP_REDACT": {
-      console.log(`[compliance] shop/redact for ${shop} — deleting all shop data`);
+      info(`[compliance] shop/redact for ${shop} — deleting all shop data`);
       // Las tarifas se borran en cascada con las zonas (onDelete: Cascade)
       const deletedZones = await db.shippingZone.deleteMany({ where: { shop } });
       const deletedSessions = await db.session.deleteMany({ where: { shop } });
       const deletedAppShop = await db.appShop.deleteMany({ where: { shop } });
-      console.log(
+      info(
         `[compliance] shop/redact for ${shop} — deleted ${deletedZones.count} zones, ${deletedSessions.count} sessions, ${deletedAppShop.count} app_shop row(s)`,
       );
       break;
     }
 
     default:
-      console.log(`[compliance] Unhandled compliance topic: ${topic} for ${shop}`);
+      info(`[compliance] Unhandled compliance topic: ${topic} for ${shop}`);
   }
 
   return new Response();
