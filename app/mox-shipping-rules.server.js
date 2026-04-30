@@ -266,19 +266,7 @@ export async function createZone(shop, department, enabledServices) {
   if (Array.isArray(enabledServices) && enabledServices.length > 0) {
     data.enabledServices = JSON.stringify(enabledServices);
   }
-  try {
-    return await prisma.shippingZone.create({ data });
-  } catch (err) {
-    const msg = err?.message || "";
-    const isUnknownEnabledServicesArg =
-      msg.includes("Unknown argument `enabledServices`") ||
-      msg.includes("Unknown arg `enabledServices`");
-    if (!isUnknownEnabledServicesArg) throw err;
-
-    const { enabledServices: _ignored, ...fallbackData } = data;
-    warn("[shipping-rules] Prisma client sin enabledServices en createZone; usando fallback");
-    return prisma.shippingZone.create({ data: fallbackData });
-  }
+  return prisma.shippingZone.create({ data });
 }
 
 export async function updateZoneEnabledServices(shop, zoneId, enabledServices) {
@@ -287,21 +275,10 @@ export async function updateZoneEnabledServices(shop, zoneId, enabledServices) {
   }
   const zone = await prisma.shippingZone.findFirst({ where: { id: zoneId, shop } });
   if (!zone) throw new Error("Zone not found or unauthorized");
-  try {
-    return await prisma.shippingZone.update({
-      where: { id: zoneId },
-      data: { enabledServices: JSON.stringify(enabledServices) },
-    });
-  } catch (err) {
-    const msg = err?.message || "";
-    const isUnknownEnabledServicesArg =
-      msg.includes("Unknown argument `enabledServices`") ||
-      msg.includes("Unknown arg `enabledServices`");
-    if (!isUnknownEnabledServicesArg) throw err;
-
-    warn("[shipping-rules] Prisma client sin enabledServices en updateZoneEnabledServices; omitiendo update");
-    return zone;
-  }
+  return prisma.shippingZone.update({
+    where: { id: zoneId },
+    data: { enabledServices: JSON.stringify(enabledServices) },
+  });
 }
 
 export async function deleteZone(id, shop) {
