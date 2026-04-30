@@ -150,7 +150,12 @@
     "zone_services_title": "Servicios disponibles en esta zona",
     "zone_services_desc": "Elige qué métodos de entrega pueden configurarse para este departamento. Pre-seleccionados según tus Locations en Shopify.",
     "zone_services_save": "Guardar servicios",
-    "zone_services_empty": "Selecciona al menos un servicio."
+    "zone_services_empty": "Selecciona al menos un servicio.",
+    "required_title": "Campos obligatorios:",
+    "required_name": "Nombre — lo que el cliente ve en el checkout (ej. \"Envío Express\").",
+    "required_service": "Tipo de servicio — elige entre estándar, express o recogida en tienda.",
+    "required_price": "Precio (COP) — precio fijo, o configura rangos por peso o total del carrito.",
+    "required_optional_hint": "Los demás campos (ciudad, horario, días, tags de producto) son opcionales y sirven para afinar cuándo aplica esta tarifa."
   },
   "action": {
     "zone_created": "Zona \"{{dept}}\" creada y sincronizada",

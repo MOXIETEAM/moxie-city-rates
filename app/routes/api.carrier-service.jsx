@@ -387,7 +387,7 @@ export const action = async ({ request }) => {
     const cityResolution = resolveCity(city || "", departmentName);
     const resolvedCity = cityResolution.resolved;
 
-    debug(`[carrier-service] ${shop} | ${province} (${departmentSlug}) → city: "${city || ""}" → "${resolvedCity}" (${cityResolution.method}${cityResolution.distance ? `, dist=${cityResolution.distance}` : ""})`);
+    info(`[carrier-service] ${shop} | province="${province}" (${departmentSlug}) | city="${city || ""}" → resolved="${resolvedCity}" (${cityResolution.method}${cityResolution.distance ? `, dist=${cityResolution.distance}` : ""})`);
 
     const items = body?.rate?.items || [];
     const cartWeightKg = calculateCartWeightKg(items);
@@ -445,7 +445,7 @@ export const action = async ({ request }) => {
     const defaultFillIn = defaultRates.filter((r) => !zoneDefinedCodes.has(r.serviceCode));
     const matchingRates = [...zoneRates, ...defaultFillIn];
 
-    debug(`[carrier-service] ${departmentSlug}/${resolvedCity} | zoneDefines=[${[...zoneDefinedCodes].join(",") || "none"}] | rates: ${matchingRates.map(r => `${r.serviceCode}=$${r.price}`).join(", ") || "(ninguna)"}`);
+    info(`[carrier-service] ${departmentSlug}/${resolvedCity} | zoneDefines=[${[...zoneDefinedCodes].join(",") || "none"}] | zoneRates=${zoneRates.length} defaultRates=${defaultRates.length} matching=${matchingRates.length} | rates: ${matchingRates.map(r => `${r.serviceCode}=$${r.price}(${r.pricingMode})`).join(", ") || "(ninguna)"}`);
 
     if (!matchingRates.length) {
       debug(`[carrier-service] Sin rates para ${departmentSlug}/${resolvedCity}`);

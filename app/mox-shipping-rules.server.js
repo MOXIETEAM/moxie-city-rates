@@ -8,7 +8,7 @@
 
 import prisma from "./db.server";
 import { resolveCity, normalizeCityForRules } from "./utils/city-resolver.server";
-import { debug, warn, error as logError } from "./utils/logger.server";
+import { debug, warn, info, error as logError } from "./utils/logger.server";
 
 export { resolveCity };
 
@@ -167,22 +167,40 @@ export async function getRatesForDestination(shop, departmentSlug, city, departm
   }
 
   return zone.rates.filter((rate) => {
-    if (enabledServicesForZone && !enabledServicesForZone.has(rate.serviceCode)) return false;
+    if (enabledServicesForZone && !enabledServicesForZone.has(rate.serviceCode)) {
+      info(`[rates-filter] ${zone.slug}/${rate.name}(${rate.serviceCode}) DROP enabledServices=[${[...enabledServicesForZone].join(",")}]`);
+      return false;
+    }
 
     if (rate.cityCondition !== "all") {
       const cities = JSON.parse(rate.cities || "[]").map((c) => normalizeCityForRules(c, deptName));
-      if (rate.cityCondition === "include" && !cities.includes(normalizedCity)) return false;
-      if (rate.cityCondition === "exclude" && cities.includes(normalizedCity)) return false;
+      if (rate.cityCondition === "include" && !cities.includes(normalizedCity)) {
+        info(`[rates-filter] ${zone.slug}/${rate.name}(${rate.serviceCode}) DROP city include: input="${normalizedCity}" not in [${cities.join(",")}] (raw=${rate.cities})`);
+        return false;
+      }
+      if (rate.cityCondition === "exclude" && cities.includes(normalizedCity)) {
+        info(`[rates-filter] ${zone.slug}/${rate.name}(${rate.serviceCode}) DROP city exclude: input="${normalizedCity}" in [${cities.join(",")}]`);
+        return false;
+      }
     }
 
     if (rate.productCondition !== "all" && normalizedItemTags) {
       const rateTags = JSON.parse(rate.productTags || "[]").map((t) => t.toLowerCase().trim());
       const hasMatch = rateTags.some((rt) => normalizedItemTags.includes(rt));
-      if (rate.productCondition === "include_tags" && !hasMatch) return false;
-      if (rate.productCondition === "exclude_tags" && hasMatch) return false;
+      if (rate.productCondition === "include_tags" && !hasMatch) {
+        info(`[rates-filter] ${zone.slug}/${rate.name}(${rate.serviceCode}) DROP product include`);
+        return false;
+      }
+      if (rate.productCondition === "exclude_tags" && hasMatch) {
+        info(`[rates-filter] ${zone.slug}/${rate.name}(${rate.serviceCode}) DROP product exclude`);
+        return false;
+      }
     }
 
-    if (!isWithinSchedule(rate)) return false;
+    if (!isWithinSchedule(rate)) {
+      info(`[rates-filter] ${zone.slug}/${rate.name}(${rate.serviceCode}) DROP schedule`);
+      return false;
+    }
 
     return true;
   });

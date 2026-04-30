@@ -16,7 +16,7 @@ import {
 import { createTranslator, getLocale } from "../utils/i18n";
 import { debug, error as logError } from "../utils/logger.server";
 import { ensureFletixCarrierService } from "../utils/carrier-service.server";
-import { detectEnabledServicesForDepartment } from "../utils/locations.server";
+import { detectEnabledServicesForDepartment, getServiceAvailabilityByProvince } from "../utils/locations.server";
 import { getShopPlan, checkLimit } from "../utils/billing.server";
 import prisma from "../db.server";
 
@@ -369,12 +369,25 @@ export const action = async ({ request }) => {
         zoneByDept[z.department] = z;
       }
 
+      // Pre-fetch Locations once for the whole import so each new zone gets
+      // its enabledServices auto-detected without N extra GraphQL calls.
+      const locationsMap = await getServiceAvailabilityByProvince(admin);
+
       let zonesCreated = 0;
       let ratesCreated = 0;
 
       for (const row of rows) {
         if (!zoneByDept[row.department]) {
-          const newZone = await createZone(session.shop, row.department);
+          const slug = row.department
+            .toLowerCase()
+            .normalize("NFD")
+            .replace(/[̀-ͯ]/g, "")
+            .replace(/[^a-z0-9]+/g, "_")
+            .replace(/^_+|_+$/g, "");
+          const enabledServices = locationsMap[slug] ?? locationsMap.default ?? [
+            "mox_envio", "mox_express", "mox_pickup",
+          ];
+          const newZone = await createZone(session.shop, row.department, enabledServices);
           zoneByDept[row.department] = newZone;
           zonesCreated++;
         }
@@ -1095,6 +1108,26 @@ function RateForm({ rate, zoneId, department, onCancel, t, planLimits, enabledSe
           <s-text variant="bodySm" tone="subdued">
             {t("shipping.days_hint")}
           </s-text>
+        </div>
+
+        <div style={{
+          padding: "10px 12px",
+          borderRadius: 8,
+          background: "#f6f6f7",
+          border: "1px solid #e3e3e3",
+          fontSize: 12,
+          color: "#444",
+          lineHeight: 1.5,
+        }}>
+          <strong>{t("shipping.required_title")}</strong>
+          <ul style={{ margin: "4px 0 0 16px", padding: 0 }}>
+            <li>{t("shipping.required_name")}</li>
+            <li>{t("shipping.required_service")}</li>
+            <li>{t("shipping.required_price")}</li>
+          </ul>
+          <div style={{ marginTop: 6, color: "#6d7175" }}>
+            {t("shipping.required_optional_hint")}
+          </div>
         </div>
 
         <s-stack direction="inline" gap="base">
