@@ -19,6 +19,7 @@ import { debug } from "../utils/logger.server";
 import { checkLimit, getShopPlanForStorefront } from "../utils/billing.server";
 import prisma from "../db.server";
 import { verifyAppProxyOrUnauthorized } from "../utils/app-proxy-auth.server";
+import { consume, getClientIp, rateLimitedResponse } from "../utils/rate-limit.server";
 
 const PROVINCE_CODE_TO_SLUG = {
   AMA: "amazonas", ANT: "antioquia", ARA: "arauca", ATL: "atlantico",
@@ -211,6 +212,10 @@ export const loader = async ({ request }) => {
   }
 
   const url = new URL(request.url);
+  const shopParam = url.searchParams.get("shop") || "unknown";
+  if (!consume(`rate-calc:${shopParam}:${getClientIp(request)}`, { capacity: 30, refillPerSec: 1 })) {
+    return rateLimitedResponse(30, CORS_HEADERS);
+  }
 
   if (url.searchParams.get("plan_check") === "1") {
     const shop = url.searchParams.get("shop");
@@ -247,6 +252,10 @@ export const action = async ({ request }) => {
 
   try {
     const body = await request.json();
+    const shopForLimit = body?.shop || "unknown";
+    if (!consume(`rate-calc:${shopForLimit}:${getClientIp(request)}`, { capacity: 30, refillPerSec: 1 })) {
+      return rateLimitedResponse(30, CORS_HEADERS);
+    }
     if (body.plan_check) {
       const planInfo = await getShopPlanForStorefront(body.shop);
       return Response.json(

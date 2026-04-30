@@ -18,6 +18,7 @@ import { debug, info, error as logError } from "../utils/logger.server";
 import { unauthenticated } from "../shopify.server";
 import prisma from "../db.server";
 import { verifyCarrierServiceCallbackHmac } from "../utils/shopify-hmac.server";
+import { consume, getClientIp } from "../utils/rate-limit.server";
 
 /**
  * toSlug — inlineado para evitar dependencia en mox-tags.server.
@@ -334,6 +335,13 @@ export const action = async ({ request }) => {
       return Response.json({ rates: [] });
     }
 
+    // Rate-limit per shop. Shopify itself is the only legitimate caller and
+    // checkout traffic stays well under this. Burst of 120 covers Shopify's
+    // parallel calls during a single checkout (multiple shipping options).
+    if (!consume(`carrier:${shop}`, { capacity: 120, refillPerSec: 4 })) {
+      return Response.json({ rates: [] }, { status: 429, headers: { "Retry-After": "30" } });
+    }
+
     const rawBody = await request.text();
     const hmac = request.headers.get("X-Shopify-Hmac-Sha256");
     const secret = process.env.SHOPIFY_API_SECRET || "";
@@ -343,6 +351,9 @@ export const action = async ({ request }) => {
     }
     if (!verifyCarrierServiceCallbackHmac(rawBody, hmac, secret)) {
       logError("[carrier-service] Invalid or missing HMAC for shop param", shop);
+      // Tighter limit on HMAC failures — repeated invalid HMAC attempts are
+      // probably abuse, so demote the bucket aggressively per source IP.
+      consume(`carrier-bad:${getClientIp(request)}`, { capacity: 10, refillPerSec: 0.1 });
       return Response.json({ rates: [] }, { status: 401 });
     }
 
