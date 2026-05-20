@@ -4,9 +4,13 @@
   "scripts": {
     "build": "react-router build",
     "dev": "shopify app dev --config=fletix",
+    "dev:fletix": "shopify app dev --config=fletix",
+    "dev:cityrates": "shopify app dev --config=cityrates",
     "config:link": "shopify app config link",
     "generate": "shopify app generate",
     "deploy": "shopify app deploy --config=fletix",
+    "deploy:fletix": "shopify app deploy --config=fletix",
+    "deploy:cityrates": "shopify app deploy --config=cityrates",
     "config:use": "shopify app config use",
     "env": "shopify app env",
     "start": "react-router-serve ./build/server/index.js",

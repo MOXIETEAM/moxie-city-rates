@@ -5,8 +5,8 @@
     "billing": "Planes"
   },
   "home": {
-    "title": "Fletix",
-    "welcome_title": "¡Bienvenido a Fletix! 🎉",
+    "title": "City Rates Custom",
+    "welcome_title": "¡Bienvenido a City Rates! 🎉",
     "welcome_subtitle": "Gestiona zonas, tarifas y el carrier service para el checkout desde un solo lugar.",
     "metric_zones": "Zonas activas",
     "metric_plan": "Plan actual",
@@ -104,7 +104,7 @@
     "sync_button": "Forzar sincronización",
     "sync_loading": "Sincronizando...",
     "carrier_title": "Re-registrar Carrier Service",
-    "carrier_desc": "Re-crear o reparar el carrier service de Fletix en Shopify. Auto-registrado al instalar — usa solo si el carrier está faltante.",
+    "carrier_desc": "Re-crear o reparar el carrier service de City Rates en Shopify. Auto-registrado al instalar — usa solo si el carrier está faltante.",
     "carrier_button": "Re-registrar carrier",
     "carrier_loading": "Registrando...",
     "csv_title": "Importar / Exportar CSV",
@@ -212,6 +212,6 @@
     "limit_feature": "Esta función está disponible en el plan Pro.",
     "usage_line": "{{zones}} zonas · {{rates}} tarifas",
     "sponsored_badge": "Patrocinado",
-    "sponsored_cannot_downgrade": "Este acceso Pro está asignado por el equipo Fletix. Para cambiar de plan, contacta soporte."
+    "sponsored_cannot_downgrade": "Este acceso Pro está asignado por el equipo City Rates. Para cambiar de plan, contacta soporte."
   }
 }

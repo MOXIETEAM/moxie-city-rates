@@ -5,8 +5,8 @@
     "billing": "Plans"
   },
   "home": {
-    "title": "Fletix",
-    "welcome_title": "Welcome to Fletix! 🎉",
+    "title": "City Rates",
+    "welcome_title": "Welcome to City Rates! 🎉",
     "welcome_subtitle": "Manage zones, rates, and the carrier service for checkout in one place.",
     "metric_zones": "Active zones",
     "metric_plan": "Current plan",
@@ -104,7 +104,7 @@
     "sync_button": "Force re-sync",
     "sync_loading": "Syncing...",
     "carrier_title": "Re-register Carrier Service",
-    "carrier_desc": "Re-create or repair the Fletix carrier service in Shopify. Auto-registered on install — only use if carrier is missing.",
+    "carrier_desc": "Re-create or repair the City Rates carrier service in Shopify. Auto-registered on install — only use if carrier is missing.",
     "carrier_button": "Re-register carrier",
     "carrier_loading": "Registering...",
     "csv_title": "Import / Export CSV",
@@ -212,6 +212,6 @@
     "limit_feature": "This feature is available on the Pro plan.",
     "usage_line": "{{zones}} zones · {{rates}} rates",
     "sponsored_badge": "Sponsored",
-    "sponsored_cannot_downgrade": "This Pro access is assigned by the Fletix team. Contact support to change plans."
+    "sponsored_cannot_downgrade": "This Pro access is assigned by the City Rates team. Contact support to change plans."
   }
 }
