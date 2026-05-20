@@ -7,7 +7,7 @@
 export function getLegalBrand() {
   const isCityRates = process.env.APP_VARIANT === "cityrates";
   return {
-    appName: isCityRates ? "City Rates Custom" : "Fletix",
+    appName: isCityRates ? "City Rates" : "Fletix",
     company: "Moxie",
     contactEmail: "info@moxiedigital.co",
     website: "https://moxiedigital.co",
