@@ -1,4 +1,12 @@
+import { useLoaderData } from "react-router";
 import { login } from "../shopify.server";
+
+function getBrand() {
+  const variant = process.env.APP_VARIANT === "cityrates" ? "cityrates" : "fletix";
+  return variant === "cityrates"
+    ? { name: "City Rates", initial: "C" }
+    : { name: "Fletix", initial: "F" };
+}
 
 export const loader = async ({ request }) => {
   const url = new URL(request.url);
@@ -14,7 +22,10 @@ export const loader = async ({ request }) => {
     return login(postRequest);
   }
 
-  return login(request);
+  const result = await login(request);
+  // login() may return a Response (redirect) or null/data. If response, pass through.
+  if (result instanceof Response) return result;
+  return { brand: getBrand() };
 };
 
 export const action = async ({ request }) => {
@@ -22,6 +33,8 @@ export const action = async ({ request }) => {
 };
 
 export default function AuthLogin() {
+  const data = useLoaderData();
+  const brand = data?.brand || { name: "Fletix", initial: "F" };
   return (
     <div
       style={{
@@ -61,9 +74,9 @@ export default function AuthLogin() {
             fontWeight: 700,
           }}
         >
-          F
+          {brand.initial}
         </div>
-        <h1 style={{ fontSize: 20, fontWeight: 700, margin: "0 0 8px" }}>Fletix</h1>
+        <h1 style={{ fontSize: 20, fontWeight: 700, margin: "0 0 8px" }}>{brand.name}</h1>
         <p style={{ fontSize: 14, color: "#637381", margin: 0 }}>Connecting to your store...</p>
         <div
           style={{

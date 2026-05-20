@@ -14,6 +14,11 @@ export default function App() {
       <head>
         <meta charSet="utf-8" />
         <meta name="viewport" content="width=device-width,initial-scale=1" />
+        <link
+          rel="icon"
+          type="image/png"
+          href="https://www.moxiedigital.co/cdn/shop/files/Favicon_Moxie_Nuevo.png?crop=center&height=32&v=1772566344&width=32"
+        />
         <link rel="preconnect" href="https://cdn.shopify.com/" />
         <link
           rel="stylesheet"

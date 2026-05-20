@@ -5,9 +5,11 @@ import { createTranslator } from "../utils/i18n";
 import { getShopPlan } from "../utils/billing.server";
 import prisma from "../db.server";
 import { error as logError } from "../utils/logger.server";
+import { CARRIER_NAME } from "../utils/carrier-service.server";
+import { PLAN_PRO } from "../utils/billing.constants";
 
-/** Detecta si el carrier "Fletix" está registrado y activo en la tienda (Admin API). */
-async function checkFletixCarrierRegistered(admin) {
+/** Detecta si el carrier de la app está registrado y activo en la tienda (Admin API). */
+async function checkCarrierRegistered(admin) {
   try {
     const res = await admin.graphql(`
       query CarrierServicesCheck {
@@ -18,9 +20,9 @@ async function checkFletixCarrierRegistered(admin) {
     `);
     const json = await res.json();
     const nodes = json.data?.carrierServices?.nodes ?? [];
-    return nodes.some((c) => c.name === "Fletix" && c.active !== false);
+    return nodes.some((c) => c.name === CARRIER_NAME && c.active !== false);
   } catch (err) {
-    logError("[app._index] checkFletixCarrierRegistered:", err);
+    logError("[app._index] checkCarrierRegistered:", err);
     return false;
   }
 }
@@ -38,7 +40,7 @@ export const loader = async ({ request }) => {
       include: { rates: { select: { serviceCode: true, pricingMode: true } } },
       orderBy: { department: "asc" },
     }),
-    checkFletixCarrierRegistered(admin),
+    checkCarrierRegistered(admin),
   ]);
 
   const serviceCounts = {};
@@ -250,7 +252,7 @@ export default function Index() {
   if (data.weightTierCount > 0) pricingSubLabel.push(t("home.by_weight").replace("{{n}}", data.weightTierCount));
   if (data.cartTotalCount > 0) pricingSubLabel.push(t("home.by_amount").replace("{{n}}", data.cartTotalCount));
 
-  const isPro = data.planName === "Fletix Pro";
+  const isPro = data.planName === PLAN_PRO;
   const planShort = isPro ? "Pro" : "Free";
   const planSub = isPro ? t("home.plan_pro_sub") : t("home.plan_free_sub");
 

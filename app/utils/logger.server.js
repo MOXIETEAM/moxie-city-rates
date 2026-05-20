@@ -5,7 +5,7 @@ export function debug(...args) {
 }
 
 export function info(...args) {
-  console.log(...args);
+  if (isDev) console.log(...args);
 }
 
 export function warn(...args) {

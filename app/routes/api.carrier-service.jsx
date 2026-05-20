@@ -339,7 +339,7 @@ export const action = async ({ request }) => {
     // checkout traffic stays well under this. Burst of 120 covers Shopify's
     // parallel calls during a single checkout (multiple shipping options).
     if (!consume(`carrier:${shop}`, { capacity: 120, refillPerSec: 4 })) {
-      return Response.json({ rates: [] }, { status: 429, headers: { "Retry-After": "30" } });
+      return Response.json({ rates: [] });
     }
 
     const rawBody = await request.text();
@@ -347,14 +347,14 @@ export const action = async ({ request }) => {
     const secret = process.env.SHOPIFY_API_SECRET || "";
     if (!secret) {
       logError("[carrier-service] SHOPIFY_API_SECRET is not configured");
-      return Response.json({ rates: [] }, { status: 500 });
+      return Response.json({ rates: [] });
     }
     if (!verifyCarrierServiceCallbackHmac(rawBody, hmac, secret)) {
       logError("[carrier-service] Invalid or missing HMAC for shop param", shop);
       // Tighter limit on HMAC failures — repeated invalid HMAC attempts are
       // probably abuse, so demote the bucket aggressively per source IP.
       consume(`carrier-bad:${getClientIp(request)}`, { capacity: 10, refillPerSec: 0.1 });
-      return Response.json({ rates: [] }, { status: 401 });
+      return Response.json({ rates: [] });
     }
 
     let body;
@@ -362,7 +362,7 @@ export const action = async ({ request }) => {
       body = JSON.parse(rawBody || "{}");
     } catch {
       logError("[carrier-service] Invalid JSON body");
-      return Response.json({ rates: [] }, { status: 400 });
+      return Response.json({ rates: [] });
     }
     const destination = body?.rate?.destination;
 
@@ -502,5 +502,6 @@ export const action = async ({ request }) => {
 
 // GET para health check
 export const loader = async () => {
-  return Response.json({ status: "ok", service: "fletix-carrier-service" });
+  const variant = process.env.APP_VARIANT === "cityrates" ? "cityrates" : "fletix";
+  return Response.json({ status: "ok", service: `${variant}-carrier-service` });
 };

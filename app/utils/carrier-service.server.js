@@ -14,7 +14,9 @@
 
 import { debug, error as logError, warn } from "./logger.server";
 
-const CARRIER_NAME = "Fletix";
+export const CARRIER_NAME =
+  process.env.CARRIER_NAME ||
+  (process.env.APP_VARIANT === "cityrates" ? "City Rates" : "Fletix");
 
 function buildCallbackUrl(shopDomain) {
   const appUrl = process.env.SHOPIFY_APP_URL || process.env.HOST;

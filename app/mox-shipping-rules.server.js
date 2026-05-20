@@ -374,14 +374,16 @@ const METAFIELD_KEY = "shipping_rules";
  * el metafield en Settings → Custom data del admin con descripción.
  */
 async function ensureFletixMetafieldDefinition(admin) {
+  const brandName =
+    process.env.APP_VARIANT === "cityrates" ? "City Rates" : "Fletix";
   try {
     const res = await admin.graphql(METAFIELD_DEFINITION_CREATE_MUTATION, {
       variables: {
         definition: {
           namespace: FLETIX_NAMESPACE,
           key: METAFIELD_KEY,
-          name: "Fletix Shipping Rules",
-          description: "Reglas de envío publicadas por Fletix para consumo de temas.",
+          name: `${brandName} Shipping Rules`,
+          description: `Reglas de envío publicadas por ${brandName} para consumo de temas.`,
           type: "json",
           ownerType: "SHOP",
           access: { storefront: "PUBLIC_READ" },
