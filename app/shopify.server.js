@@ -9,6 +9,8 @@ import { PrismaSessionStorage } from "@shopify/shopify-app-session-storage-prism
 import prisma from "./db.server";
 import { ensureShopRecord } from "./utils/shop-record.server";
 import { ensureFletixCarrierService } from "./utils/carrier-service.server";
+import { syncRulesToMetafield } from "./mox-shipping-rules.server";
+import { warn } from "./utils/logger.server";
 import { PLAN_FREE, PLAN_PRO } from "./utils/billing.constants";
 
 export { PLAN_FREE, PLAN_PRO };
@@ -47,6 +49,15 @@ const shopify = shopifyApp({
       // post-install. Helper never throws — install must succeed even if Shopify
       // rejects the carrier (e.g. shop on plan without third-party carriers).
       await ensureFletixCarrierService(admin, session.shop);
+      // Best-effort metafield bootstrap: creates the JSON definition and writes
+      // an empty rules payload so the storefront extension and the admin Custom
+      // data UI both have a target from day one. Wrapped so install never fails
+      // because of metafield issues (e.g. transient GraphQL error).
+      try {
+        await syncRulesToMetafield(admin, session.shop);
+      } catch (e) {
+        warn("[afterAuth] syncRulesToMetafield bootstrap:", e?.message || e);
+      }
     },
   },
 });

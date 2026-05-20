@@ -200,10 +200,10 @@ function parseCSVContent(csvText, t) {
 // --- Loader / Action ---
 
 export const loader = async ({ request }) => {
-  const { session, billing } = await authenticate.admin(request);
+  const { session, billing, admin } = await authenticate.admin(request);
   const zones = await getZonesWithRates(session.shop);
   const defaultZone = await getOrCreateDefaultZone(session.shop);
-  const planInfo = await getShopPlan(billing, session.shop);
+  const planInfo = await getShopPlan(billing, session.shop, admin);
   return { zones, defaultZone, planInfo };
 };
 
@@ -212,7 +212,7 @@ export const action = async ({ request }) => {
   const url = new URL(request.url);
   const locale = getLocale(url.searchParams.get("locale"));
   const t = createTranslator(locale);
-  const planInfo = await getShopPlan(billing, session.shop);
+  const planInfo = await getShopPlan(billing, session.shop, admin);
   const formData = await request.formData();
   const intent = formData.get("_intent");
 

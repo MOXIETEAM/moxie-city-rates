@@ -30,7 +30,7 @@ async function checkCarrierRegistered(admin) {
 export const loader = async ({ request }) => {
   const { session, billing, admin } = await authenticate.admin(request);
   const shop = session.shop;
-  const planInfo = await getShopPlan(billing, shop);
+  const planInfo = await getShopPlan(billing, shop, admin);
 
   const [zoneCount, rateCount, zones, hasCarrierRegistered] = await Promise.all([
     prisma.shippingZone.count({ where: { shop } }),
@@ -62,6 +62,16 @@ export const loader = async ({ request }) => {
   const docsUrl =
     process.env.APP_DOCS_URL?.trim() || "https://shopify.dev/docs/apps/build";
 
+  // Deep link to theme editor with app block activation when extension UUID is configured.
+  // Without the env var, fall back to a plain theme editor URL — merchant still has to
+  // find the block manually in the Apps section but the path is still reachable.
+  const extensionUuid = process.env.SHOPIFY_THEME_EXTENSION_UUID?.trim();
+  const blockHandle = process.env.SHOPIFY_THEME_BLOCK_HANDLE?.trim() || "rate-calculator-embed";
+  const shopAdminUrl = `https://${shop}/admin/themes/current/editor`;
+  const themeEditorUrl = extensionUuid
+    ? `${shopAdminUrl}?context=apps&activateAppId=${extensionUuid}/${blockHandle}`
+    : `${shopAdminUrl}?context=apps`;
+
   return {
     shop,
     zoneCount,
@@ -74,6 +84,7 @@ export const loader = async ({ request }) => {
     planName: planInfo.plan,
     docsUrl,
     hasCarrierRegistered,
+    themeEditorUrl,
   };
 };
 
@@ -262,6 +273,11 @@ export default function Index() {
   const setupPct = Math.round((setupDone / setupTotal) * 100);
 
   const goRules = () => navigate("/app/shipping-rules");
+  const openThemeEditor = () => {
+    if (typeof window !== "undefined" && data.themeEditorUrl) {
+      window.open(data.themeEditorUrl, "_blank", "noopener,noreferrer");
+    }
+  };
 
   return (
     <div
@@ -299,6 +315,49 @@ export default function Index() {
             <p style={{ fontSize: 13, color: "#6d7175", margin: "8px 0 0" }}>{data.shop}</p>
           </div>
         </div>
+
+        {/* Paywall banner — visible until merchant subscribes (excluded for sponsored Pro). */}
+        {!isPro && (
+          <div
+            style={{
+              background: "linear-gradient(135deg, #fff7ed, #fde8d1)",
+              border: "1px solid #f1c889",
+              borderRadius: 16,
+              padding: "20px 24px",
+              marginBottom: 24,
+              display: "flex",
+              flexWrap: "wrap",
+              justifyContent: "space-between",
+              alignItems: "center",
+              gap: 16,
+            }}
+          >
+            <div style={{ maxWidth: 540 }}>
+              <div style={{ fontSize: 18, fontWeight: 700, color: "#7c3a0c", margin: 0 }}>
+                {t("billing.needs_subscription_title")}
+              </div>
+              <p style={{ fontSize: 14, color: "#7c3a0c", margin: "6px 0 0", lineHeight: 1.5 }}>
+                {t("billing.needs_subscription_desc")}
+              </p>
+            </div>
+            <button
+              type="button"
+              onClick={() => navigate("/app/billing")}
+              style={{
+                padding: "12px 22px",
+                background: "#bf5b16",
+                color: "#fff",
+                border: "none",
+                borderRadius: 10,
+                fontSize: 14,
+                fontWeight: 700,
+                cursor: "pointer",
+              }}
+            >
+              {t("billing.needs_subscription_cta")}
+            </button>
+          </div>
+        )}
 
         {/* Métricas */}
         <div style={{ display: "flex", gap: 16, marginBottom: 24, flexWrap: "wrap" }}>
@@ -363,6 +422,13 @@ export default function Index() {
             desc={t("home.step_carrier_desc")}
             actionLabel={!data.hasCarrierRegistered ? t("home.step_action_carrier") : undefined}
             onAction={!data.hasCarrierRegistered ? goRules : undefined}
+          />
+          <SetupStep
+            done={false}
+            label={t("home.step_theme")}
+            desc={t("home.step_theme_desc")}
+            actionLabel={t("home.step_action_theme")}
+            onAction={openThemeEditor}
           />
         </div>
 
