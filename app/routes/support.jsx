@@ -1,5 +1,6 @@
 import { useLoaderData } from "react-router";
-import { getLegalBrand, LEGAL_STYLES } from "../utils/legal-brand.server";
+import { getLegalBrand } from "../utils/legal-brand.server";
+import { LEGAL_STYLES } from "../utils/legal-styles";
 
 export const loader = async () => {
   return { brand: getLegalBrand() };
