@@ -40,9 +40,32 @@ export const loader = async ({ request }) => {
     logError("[billing loader] usage count failed:", e?.message || e);
   }
 
+  // Pre-compute the Managed Pricing plan selection URL server-side so the UI
+  // can render a plain `<a target="_top">` link. Clicking the link triggers a
+  // native top-frame navigation to admin.shopify.com — same origin as the
+  // Shopify Admin parent frame, so no iframe sandbox / cross-origin issues, no
+  // fetch+JSON parsing, no transient-activation timing. This is the only flow
+  // that survives every variant of "App Bridge isn't loaded yet" or "server
+  // returned HTML instead of JSON" that we hit with fetch-based subscribe.
+  let planSelectionUrl = null;
+  if (process.env.BILLING_MODE === "managed") {
+    const appHandle = (process.env.APP_HANDLE || "").trim();
+    const storeHandle = (session.shop || "").replace(/\.myshopify\.com$/, "");
+    if (appHandle && storeHandle) {
+      planSelectionUrl = `https://admin.shopify.com/store/${storeHandle}/charges/${appHandle}/pricing_plans`;
+    } else {
+      logError(
+        "[billing loader] managed mode but APP_HANDLE or shop missing — set APP_HANDLE env var to the handle from shopify.app.<config>.toml",
+        { appHandle, storeHandle },
+      );
+    }
+  }
+
   return {
     planInfo,
     usage: { zones: zoneCount, rates: rateCount },
+    planSelectionUrl,
+    billingMode: process.env.BILLING_MODE === "managed" ? "managed" : "api",
   };
 };
 
@@ -121,7 +144,7 @@ function FeatureRow({ label, included }) {
   );
 }
 
-function PlanCard({ name, description, price, features, isCurrent, actionLabel, onAction, highlight, loading, trialBadge, trialNote }) {
+function PlanCard({ name, description, price, features, isCurrent, actionLabel, onAction, actionHref, highlight, loading, trialBadge, trialNote }) {
   return (
     <div
       style={{
@@ -202,6 +225,32 @@ function PlanCard({ name, description, price, features, isCurrent, actionLabel, 
         >
           {actionLabel}
         </div>
+      ) : actionHref ? (
+        // Native top-frame navigation to admin.shopify.com pricing page. Same
+        // origin as the parent Shopify Admin frame, so target="_top" works
+        // without any iframe sandbox or session token plumbing. No fetch, no
+        // JSON parsing, no race conditions — the only flow that can't return
+        // "HTML instead of JSON" because there's no JSON involved.
+        <a
+          href={actionHref}
+          target="_top"
+          rel="noopener noreferrer"
+          style={{
+            display: "block",
+            textAlign: "center",
+            padding: "10px 0",
+            fontSize: 14,
+            fontWeight: 600,
+            color: highlight ? "white" : "#202223",
+            background: highlight ? "#5c6ac4" : "white",
+            border: highlight ? "none" : "1px solid #e1e3e5",
+            borderRadius: 8,
+            textDecoration: "none",
+            width: "100%",
+          }}
+        >
+          {actionLabel}
+        </a>
       ) : (
         <button
           type="button"
@@ -228,7 +277,7 @@ function PlanCard({ name, description, price, features, isCurrent, actionLabel, 
 }
 
 export default function BillingPage() {
-  const { planInfo, usage } = useLoaderData();
+  const { planInfo, usage, planSelectionUrl, billingMode } = useLoaderData();
   const { locale } = useOutletContext();
   const t = createTranslator(locale);
   const fetcher = useFetcher();
@@ -394,7 +443,10 @@ export default function BillingPage() {
         </div>
       )}
 
-      {/* Single Pro plan card */}
+      {/* Single Pro plan card. Managed Pricing uses a plain anchor with
+          target="_top" to admin.shopify.com — native top-frame navigation that
+          never depends on fetch/JSON/App Bridge interception. Legacy api mode
+          falls back to the fetch+top.location handler. */}
       <div style={{ display: "flex", justifyContent: "center" }}>
         <PlanCard
           name={t("billing.pro_name")}
@@ -403,7 +455,8 @@ export default function BillingPage() {
           features={proFeatures}
           isCurrent={isPro}
           actionLabel={isPro ? t("billing.downgrade") : t("billing.start_trial")}
-          onAction={isPro ? handleDowngrade : handleStartTrial}
+          onAction={isPro ? handleDowngrade : billingMode === "managed" ? undefined : handleStartTrial}
+          actionHref={!isPro && billingMode === "managed" ? planSelectionUrl : undefined}
           highlight={!isPro}
           loading={loading}
           trialBadge={!isPro ? t("billing.trial_badge") : undefined}

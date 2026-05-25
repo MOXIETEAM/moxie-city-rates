@@ -18,7 +18,7 @@ import { debug, error as logError } from "../utils/logger.server";
 import { ensureFletixCarrierService } from "../utils/carrier-service.server";
 import { detectEnabledServicesForDepartment, getServiceAvailabilityByProvince } from "../utils/locations.server";
 import { getShopPlan, checkLimit, PLAN_LIMITS } from "../utils/billing.server";
-import { PLAN_FREE } from "../utils/billing.constants";
+import { PLAN_FREE, PLAN_PRO } from "../utils/billing.constants";
 import prisma from "../db.server";
 
 import MUNICIPALITIES from "../data/municipalities.json";
@@ -229,7 +229,27 @@ export const loader = async ({ request }) => {
       subscription: null,
     };
   }
-  return { zones, defaultZone, planInfo };
+  // Pre-compute the Managed Pricing plan selection URL server-side so the
+  // shipping-rules page can render a clear "Subscribe to use this feature"
+  // banner with a native `<a target="_top">` link. Without this banner the
+  // reviewer sees a page where nothing works and no explanation — a likely
+  // rejection reason.
+  let planSelectionUrl = null;
+  if (process.env.BILLING_MODE === "managed") {
+    const appHandle = (process.env.APP_HANDLE || "").trim();
+    const storeHandle = (session.shop || "").replace(/\.myshopify\.com$/, "");
+    if (appHandle && storeHandle) {
+      planSelectionUrl = `https://admin.shopify.com/store/${storeHandle}/charges/${appHandle}/pricing_plans`;
+    }
+  }
+
+  return {
+    zones,
+    defaultZone,
+    planInfo,
+    planSelectionUrl,
+    billingMode: process.env.BILLING_MODE === "managed" ? "managed" : "api",
+  };
 };
 
 export const action = async ({ request }) => {
@@ -1490,10 +1510,11 @@ function downloadCSV(content, filename) {
 // --- Page ---
 
 export default function ShippingRules() {
-  const { zones: allZones, defaultZone, planInfo } = useLoaderData();
+  const { zones: allZones, defaultZone, planInfo, planSelectionUrl, billingMode } = useLoaderData();
   const { locale } = useOutletContext();
   const t = createTranslator(locale);
   const zones = allZones.filter((z) => z.slug !== "_default");
+  const isPro = planInfo.plan === PLAN_PRO;
   const csvAllowed = planInfo.limits.csvImportExport === true;
   const createFetcher = useFetcher();
   const syncFetcher = useFetcher();
@@ -1561,6 +1582,77 @@ export default function ShippingRules() {
       heading={t("shipping.title")}
       subtitle={t("shipping.subtitle")}
     >
+      {/* Paywall banner — only visible when the merchant is not subscribed.
+          Critical for App Review: without this banner the reviewer sees a
+          page where the buttons are disabled but no explanation is given,
+          which Shopify treats as broken behavior. Anchor uses target="_top"
+          + Shopify-hosted plan selection URL (Managed Pricing) so the click
+          escapes the iframe to admin.shopify.com without any fetch. */}
+      {!isPro && (
+        <s-section>
+          <div
+            style={{
+              background: "linear-gradient(135deg, #fff7ed, #fde8d1)",
+              border: "1px solid #f1c889",
+              borderRadius: 12,
+              padding: "18px 20px",
+              display: "flex",
+              flexWrap: "wrap",
+              justifyContent: "space-between",
+              alignItems: "center",
+              gap: 16,
+            }}
+            role="alert"
+          >
+            <div style={{ maxWidth: 520 }}>
+              <div style={{ fontSize: 15, fontWeight: 700, color: "#7c3a0c", margin: 0 }}>
+                {t("billing.needs_subscription_title")}
+              </div>
+              <p style={{ fontSize: 13, color: "#7c3a0c", margin: "4px 0 0", lineHeight: 1.5 }}>
+                {t("billing.needs_subscription_desc")}
+              </p>
+            </div>
+            {billingMode === "managed" && planSelectionUrl ? (
+              <a
+                href={planSelectionUrl}
+                target="_top"
+                rel="noopener noreferrer"
+                style={{
+                  display: "inline-block",
+                  padding: "10px 18px",
+                  background: "#bf5b16",
+                  color: "#fff",
+                  borderRadius: 8,
+                  fontSize: 13,
+                  fontWeight: 700,
+                  textDecoration: "none",
+                  cursor: "pointer",
+                }}
+              >
+                {t("billing.needs_subscription_cta")}
+              </a>
+            ) : (
+              <a
+                href="/app/billing"
+                style={{
+                  display: "inline-block",
+                  padding: "10px 18px",
+                  background: "#bf5b16",
+                  color: "#fff",
+                  borderRadius: 8,
+                  fontSize: 13,
+                  fontWeight: 700,
+                  textDecoration: "none",
+                  cursor: "pointer",
+                }}
+              >
+                {t("billing.needs_subscription_cta")}
+              </a>
+            )}
+          </div>
+        </s-section>
+      )}
+
       <s-section heading={t("shipping.default_title")}>
         <s-stack direction="block" gap="base">
           <s-text variant="bodySm" tone="subdued">

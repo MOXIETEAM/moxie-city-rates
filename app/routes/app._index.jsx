@@ -92,6 +92,18 @@ export const loader = async ({ request }) => {
     ? `${shopAdminUrl}?context=apps&activateAppId=${extensionUuid}/${blockHandle}`
     : `${shopAdminUrl}?context=apps`;
 
+  // Pre-compute the Managed Pricing plan selection URL server-side so the home
+  // banner CTA can be a plain `<a target="_top">`. See app.billing.jsx loader
+  // for the rationale.
+  let planSelectionUrl = null;
+  if (process.env.BILLING_MODE === "managed") {
+    const appHandle = (process.env.APP_HANDLE || "").trim();
+    const storeHandle = (shop || "").replace(/\.myshopify\.com$/, "");
+    if (appHandle && storeHandle) {
+      planSelectionUrl = `https://admin.shopify.com/store/${storeHandle}/charges/${appHandle}/pricing_plans`;
+    }
+  }
+
   return {
     shop,
     zoneCount,
@@ -101,6 +113,8 @@ export const loader = async ({ request }) => {
     hasDefault,
     weightTierCount,
     cartTotalCount,
+    planSelectionUrl,
+    billingMode: process.env.BILLING_MODE === "managed" ? "managed" : "api",
     planName: planInfo.plan,
     docsUrl,
     hasCarrierRegistered,
@@ -359,58 +373,83 @@ export default function Index() {
                 {t("billing.needs_subscription_desc")}
               </p>
             </div>
-            <button
-              type="button"
-              onClick={async () => {
-                try {
-                  const res = await fetch("/app/billing/subscribe", {
-                    method: "POST",
-                    headers: { Accept: "application/json" },
-                  });
-                  const text = await res.text();
-                  let data;
+            {data.billingMode === "managed" && data.planSelectionUrl ? (
+              // Native top-frame nav to admin.shopify.com pricing page. Same
+              // origin as the parent Shopify Admin frame, so target="_top"
+              // works directly without fetch+JSON plumbing.
+              <a
+                href={data.planSelectionUrl}
+                target="_top"
+                rel="noopener noreferrer"
+                style={{
+                  display: "inline-block",
+                  padding: "12px 22px",
+                  background: "#bf5b16",
+                  color: "#fff",
+                  border: "none",
+                  borderRadius: 10,
+                  fontSize: 14,
+                  fontWeight: 700,
+                  cursor: "pointer",
+                  textDecoration: "none",
+                }}
+              >
+                {t("billing.needs_subscription_cta")}
+              </a>
+            ) : (
+              <button
+                type="button"
+                onClick={async () => {
                   try {
-                    data = JSON.parse(text);
-                  } catch {
-                    window.alert(
-                      `Server returned HTML instead of JSON (HTTP ${res.status}). Refresh and try again.`,
-                    );
-                    return;
-                  }
-                  if (data.confirmationUrl) {
-                    const top = window.top || window.parent || window;
+                    const res = await fetch("/app/billing/subscribe", {
+                      method: "POST",
+                      headers: { Accept: "application/json" },
+                    });
+                    const text = await res.text();
+                    let data;
                     try {
-                      top.location.href = data.confirmationUrl;
+                      data = JSON.parse(text);
                     } catch {
-                      window.location.href = data.confirmationUrl;
+                      window.alert(
+                        `Server returned HTML instead of JSON (HTTP ${res.status}). Refresh and try again.`,
+                      );
+                      return;
                     }
-                    return;
+                    if (data.confirmationUrl) {
+                      const top = window.top || window.parent || window;
+                      try {
+                        top.location.href = data.confirmationUrl;
+                      } catch {
+                        window.location.href = data.confirmationUrl;
+                      }
+                      return;
+                    }
+                    if (data.alreadyActive) {
+                      window.location.reload();
+                      return;
+                    }
+                    if (data.error) {
+                      window.alert(data.error);
+                    }
+                  } catch (e) {
+                    window.alert(e?.message || "Network error");
                   }
-                  if (data.alreadyActive) {
-                    window.location.reload();
-                    return;
-                  }
-                  if (data.error) {
-                    window.alert(data.error);
-                  }
-                } catch (e) {
-                  window.alert(e?.message || "Network error");
-                }
-              }}
-              style={{
-                display: "inline-block",
-                padding: "12px 22px",
-                background: "#bf5b16",
-                color: "#fff",
-                border: "none",
-                borderRadius: 10,
-                fontSize: 14,
-                fontWeight: 700,
-                cursor: "pointer",
-              }}
-            >
-              {t("billing.needs_subscription_cta")}
-            </button>
+                }}
+                style={{
+                  display: "inline-block",
+                  padding: "12px 22px",
+                  background: "#bf5b16",
+                  color: "#fff",
+                  border: "none",
+                  borderRadius: 10,
+                  fontSize: 14,
+                  fontWeight: 700,
+                  cursor: "pointer",
+                }}
+              >
+                {t("billing.needs_subscription_cta")}
+              </button>
+            )}
           </div>
         )}
 
