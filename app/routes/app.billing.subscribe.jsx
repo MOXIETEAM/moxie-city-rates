@@ -116,12 +116,25 @@ const PLAN_PRO_CURRENCY = "USD";
 const PLAN_PRO_INTERVAL = "EVERY_30_DAYS";
 const PLAN_PRO_TRIAL_DAYS = 7;
 
+// Force-JSON helper so the action always returns Content-Type: application/json
+// regardless of how the client invoked it. Returning a plain object from a
+// React Router action only serializes to JSON when the request originates from
+// a React Router data fetch (URL ends in .data or includes _data=...). A bare
+// `fetch("/app/billing/subscribe", { method: "POST" })` is treated as a
+// regular navigation and the framework would otherwise render the route's
+// full HTML document — producing the "Unexpected token '<'" parse error.
+function json(data, init = {}) {
+  return new Response(JSON.stringify(data), {
+    status: init.status ?? 200,
+    headers: {
+      "Content-Type": "application/json; charset=utf-8",
+      "Cache-Control": "no-store",
+      ...(init.headers || {}),
+    },
+  });
+}
+
 export const action = async ({ request }) => {
-  // Top-level try/catch returns a 200 JSON envelope on any failure so React
-  // Router's global ErrorBoundary never fires for billing requests. The
-  // client-side handler reads `success`/`error` and shows an inline message
-  // — a 500 response triggers React Router's "Unexpected Server Error" screen
-  // and Shopify App Review treats that as a hard rejection signal.
   try {
     const { billing, session, admin } = await authenticate.admin(request);
 
@@ -139,12 +152,13 @@ export const action = async ({ request }) => {
           "[billing.subscribe] managed mode but app handle could not be resolved",
           { shop: session.shop, appHandle },
         );
-        return {
+        return json({
           success: false,
-          error: "Could not resolve the app handle from Shopify",
-        };
+          error:
+            "App handle not configured. Set APP_HANDLE env var to match the `handle` field in shopify.app.<config>.toml, or run `shopify app deploy` to register the handle.",
+        });
       }
-      return { success: true, confirmationUrl: planSelectionUrl, managed: true };
+      return json({ success: true, confirmationUrl: planSelectionUrl, managed: true });
     }
 
     const isTest = await resolveBillingTestMode(admin);
@@ -153,13 +167,13 @@ export const action = async ({ request }) => {
 
     if (!returnUrl) {
       logError("[billing.subscribe] SHOPIFY_APP_URL not configured");
-      return { success: false, error: "App URL not configured" };
+      return json({ success: false, error: "App URL not configured" });
     }
 
     try {
       const existing = await billing.check({ plans: [PLAN_PRO], isTest });
       if (existing.hasActivePayment) {
-        return { success: true, alreadyActive: true };
+        return json({ success: true, alreadyActive: true });
       }
     } catch (e) {
       logError("[billing.subscribe] check failed:", e?.message || e);
@@ -184,39 +198,39 @@ export const action = async ({ request }) => {
           ],
         },
       });
-      const json = await res.json();
-      if (json.errors?.length) {
-        logError("[billing.subscribe] GraphQL errors:", json.errors);
-        return {
+      const body = await res.json();
+      if (body.errors?.length) {
+        logError("[billing.subscribe] GraphQL errors:", body.errors);
+        return json({
           success: false,
-          error: json.errors.map((e) => e.message).join("; "),
-        };
+          error: body.errors.map((e) => e.message).join("; "),
+        });
       }
-      const payload = json?.data?.appSubscriptionCreate;
+      const payload = body?.data?.appSubscriptionCreate;
       const userErrors = payload?.userErrors ?? [];
       if (userErrors.length > 0) {
         logError("[billing.subscribe] userErrors:", userErrors);
-        return {
+        return json({
           success: false,
           error: userErrors.map((e) => e.message).join("; "),
-        };
+        });
       }
       const confirmationUrl = payload?.confirmationUrl;
       if (!confirmationUrl) {
-        logError("[billing.subscribe] missing confirmationUrl:", json);
-        return { success: false, error: "Missing confirmationUrl from Shopify" };
+        logError("[billing.subscribe] missing confirmationUrl:", body);
+        return json({ success: false, error: "Missing confirmationUrl from Shopify" });
       }
-      return { success: true, confirmationUrl };
+      return json({ success: true, confirmationUrl });
     } catch (e) {
       logError("[billing.subscribe] graphql exception:", e?.message || e);
-      return {
+      return json({
         success: false,
         error: e?.message || "Subscription request failed",
-      };
+      });
     }
   } catch (e) {
     logError("[billing.subscribe] unhandled exception:", e?.message || e, e?.stack);
-    return { success: false, error: e?.message || "Subscription request failed" };
+    return json({ success: false, error: e?.message || "Subscription request failed" });
   }
 };
 
