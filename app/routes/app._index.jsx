@@ -6,7 +6,7 @@ import { getShopPlan } from "../utils/billing.server";
 import prisma from "../db.server";
 import { error as logError } from "../utils/logger.server";
 import { CARRIER_NAME } from "../utils/carrier-service.server";
-import { PLAN_PRO } from "../utils/billing.constants";
+import { PLAN_FREE, PLAN_PRO } from "../utils/billing.constants";
 
 /** Detecta si el carrier de la app está registrado y activo en la tienda (Admin API). */
 async function checkCarrierRegistered(admin) {
@@ -30,18 +30,38 @@ async function checkCarrierRegistered(admin) {
 export const loader = async ({ request }) => {
   const { session, billing, admin } = await authenticate.admin(request);
   const shop = session.shop;
-  const planInfo = await getShopPlan(billing, shop, admin);
 
-  const [zoneCount, rateCount, zones, hasCarrierRegistered] = await Promise.all([
-    prisma.shippingZone.count({ where: { shop } }),
-    prisma.shippingRate.count({ where: { zone: { shop } } }),
-    prisma.shippingZone.findMany({
-      where: { shop },
-      include: { rates: { select: { serviceCode: true, pricingMode: true } } },
-      orderBy: { department: "asc" },
-    }),
-    checkCarrierRegistered(admin),
-  ]);
+  // Each external dependency is wrapped so a transient failure renders a
+  // degraded home page instead of a 500. Shopify App Review will reject the
+  // app on any uncaught 500 it observes during the install or onboarding flow.
+  let planInfo;
+  try {
+    planInfo = await getShopPlan(billing, shop, admin);
+  } catch (e) {
+    logError("[index loader] getShopPlan failed:", e?.message || e);
+    planInfo = { plan: PLAN_FREE, limits: {}, sponsored: false, subscription: null };
+  }
+
+  let zoneCount = 0;
+  let rateCount = 0;
+  let zones = [];
+  let hasCarrierRegistered = false;
+  try {
+    [zoneCount, rateCount, zones, hasCarrierRegistered] = await Promise.all([
+      prisma.shippingZone.count({ where: { shop } }).catch(() => 0),
+      prisma.shippingRate.count({ where: { zone: { shop } } }).catch(() => 0),
+      prisma.shippingZone
+        .findMany({
+          where: { shop },
+          include: { rates: { select: { serviceCode: true, pricingMode: true } } },
+          orderBy: { department: "asc" },
+        })
+        .catch(() => []),
+      checkCarrierRegistered(admin),
+    ]);
+  } catch (e) {
+    logError("[index loader] Promise.all failed:", e?.message || e);
+  }
 
   const serviceCounts = {};
   let weightTierCount = 0;
@@ -251,7 +271,6 @@ export default function Index() {
   const navigate = useNavigate();
 
   const hasZones = data.zoneCount > 0;
-  const hasRates = data.rateCount > 0;
 
   const serviceLabels = {
     mox_express: t("home.service_express"),
@@ -264,8 +283,8 @@ export default function Index() {
   if (data.cartTotalCount > 0) pricingSubLabel.push(t("home.by_amount").replace("{{n}}", data.cartTotalCount));
 
   const isPro = data.planName === PLAN_PRO;
-  const planShort = isPro ? "Pro" : "Free";
-  const planSub = isPro ? t("home.plan_pro_sub") : t("home.plan_free_sub");
+  const planShort = isPro ? t("home.plan_pro_short") : t("home.plan_inactive_short");
+  const planSub = isPro ? t("home.plan_pro_sub") : t("home.plan_inactive_sub");
 
   const setupTotal = 3;
   const setupDone =
@@ -342,8 +361,44 @@ export default function Index() {
             </div>
             <button
               type="button"
-              onClick={() => navigate("/app/billing")}
+              onClick={async () => {
+                try {
+                  const res = await fetch("/app/billing/subscribe", {
+                    method: "POST",
+                    headers: { Accept: "application/json" },
+                  });
+                  const text = await res.text();
+                  let data;
+                  try {
+                    data = JSON.parse(text);
+                  } catch {
+                    window.alert(
+                      `Server returned HTML instead of JSON (HTTP ${res.status}). Refresh and try again.`,
+                    );
+                    return;
+                  }
+                  if (data.confirmationUrl) {
+                    const top = window.top || window.parent || window;
+                    try {
+                      top.location.href = data.confirmationUrl;
+                    } catch {
+                      window.location.href = data.confirmationUrl;
+                    }
+                    return;
+                  }
+                  if (data.alreadyActive) {
+                    window.location.reload();
+                    return;
+                  }
+                  if (data.error) {
+                    window.alert(data.error);
+                  }
+                } catch (e) {
+                  window.alert(e?.message || "Network error");
+                }
+              }}
               style={{
+                display: "inline-block",
                 padding: "12px 22px",
                 background: "#bf5b16",
                 color: "#fff",

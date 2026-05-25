@@ -2,6 +2,7 @@
 
 client_id = "8c228546203c5dd03577b1b608bd1075"
 name = "City Rates Custom"
+handle = "city-rates-custom"
 application_url = "https://moxie-city-rates-test.onrender.com"
 embedded = true
 

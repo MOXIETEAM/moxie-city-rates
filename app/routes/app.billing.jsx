@@ -1,20 +1,44 @@
+import { useState } from "react";
 import { useLoaderData, useOutletContext, useRouteError, useFetcher } from "react-router";
 import { boundary } from "@shopify/shopify-app-react-router/server";
 import { authenticate } from "../shopify.server";
-import { PLAN_PRO } from "../utils/billing.constants";
-import { getShopPlan, resolveBillingTestMode } from "../utils/billing.server";
+import { PLAN_FREE, PLAN_PRO } from "../utils/billing.constants";
+import { getShopPlan, resolveBillingTestMode, PLAN_LIMITS } from "../utils/billing.server";
 import { getLocale, createTranslator } from "../utils/i18n";
+import { error as logError } from "../utils/logger.server";
 import prisma from "../db.server";
 
+// Loader must never throw. Any unhandled error becomes a 500 to the merchant
+// (and to the Shopify App Review reviewer), which is an automatic rejection
+// trigger. Each external dependency (Shopify billing API, Prisma) is wrapped so
+// a transient failure renders a degraded billing page with safe defaults
+// rather than a broken iframe.
 export const loader = async ({ request }) => {
   const { billing, session, admin } = await authenticate.admin(request);
 
-  const planInfo = await getShopPlan(billing, session.shop, admin);
+  let planInfo;
+  try {
+    planInfo = await getShopPlan(billing, session.shop, admin);
+  } catch (e) {
+    logError("[billing loader] getShopPlan failed:", e?.message || e);
+    planInfo = {
+      plan: PLAN_FREE,
+      limits: PLAN_LIMITS[PLAN_FREE],
+      sponsored: false,
+      subscription: null,
+    };
+  }
 
-  const [zoneCount, rateCount] = await Promise.all([
-    prisma.shippingZone.count({ where: { shop: session.shop } }),
-    prisma.shippingRate.count({ where: { zone: { shop: session.shop } } }),
-  ]);
+  let zoneCount = 0;
+  let rateCount = 0;
+  try {
+    [zoneCount, rateCount] = await Promise.all([
+      prisma.shippingZone.count({ where: { shop: session.shop } }),
+      prisma.shippingRate.count({ where: { zone: { shop: session.shop } } }),
+    ]);
+  } catch (e) {
+    logError("[billing loader] usage count failed:", e?.message || e);
+  }
 
   return {
     planInfo,
@@ -22,52 +46,58 @@ export const loader = async ({ request }) => {
   };
 };
 
+// Action wrapped in try/catch so any failure becomes a structured JSON response
+// rather than a 500. Shopify App Review's automated checks treat any uncaught
+// 500 during the reviewer's flow as an automatic rejection — defensive error
+// handling here is mandatory.
 export const action = async ({ request }) => {
-  const { billing, session, admin } = await authenticate.admin(request);
-  const url = new URL(request.url);
-  const locale = getLocale(url.searchParams.get("locale"));
-  const t = createTranslator(locale);
-  const formData = await request.formData();
-  const intent = formData.get("_intent");
+  try {
+    const { billing, session, admin } = await authenticate.admin(request);
+    const url = new URL(request.url);
+    const locale = getLocale(url.searchParams.get("locale"));
+    const t = createTranslator(locale);
+    const formData = await request.formData();
+    const intent = formData.get("_intent");
 
-  const isTest = await resolveBillingTestMode(admin);
-  const appUrl = (process.env.SHOPIFY_APP_URL || "").replace(/\/$/, "");
-  const returnUrl = appUrl ? `${appUrl}/app/billing` : undefined;
+    const isTest = await resolveBillingTestMode(admin);
 
-  if (intent === "subscribe_pro") {
-    // billing.require throws the redirect Response when no active payment exists,
-    // which React Router propagates to App Bridge so the merchant lands on the
-    // Shopify confirmation URL in the top frame.
-    await billing.require({
-      plans: [PLAN_PRO],
-      isTest,
-      onFailure: async () => {
-        throw await billing.request({
-          plan: PLAN_PRO,
-          isTest,
-          returnUrl,
-        });
-      },
-    });
-    return { success: true };
-  }
-
-  if (intent === "cancel_subscription") {
-    const planInfo = await getShopPlan(billing, session.shop, admin);
-    if (planInfo.sponsored && !planInfo.subscription) {
-      return { success: false, error: t("billing.sponsored_cannot_downgrade") };
+    if (intent === "cancel_subscription") {
+      let planInfo;
+      try {
+        planInfo = await getShopPlan(billing, session.shop, admin);
+      } catch (e) {
+        logError("[billing action] getShopPlan failed:", e?.message || e);
+        return { success: false, error: "Could not read current plan" };
+      }
+      if (planInfo.sponsored && !planInfo.subscription) {
+        return { success: false, error: t("billing.sponsored_cannot_downgrade") };
+      }
+      if (planInfo.subscription) {
+        try {
+          await billing.cancel({
+            subscriptionId: planInfo.subscription.id,
+            isTest,
+            prorate: true,
+          });
+        } catch (e) {
+          logError("[billing action] billing.cancel failed:", e?.message || e);
+          return { success: false, error: e?.message || "Cancel failed" };
+        }
+      }
+      return { success: true, message: t("billing.downgrade") };
     }
-    if (planInfo.subscription) {
-      await billing.cancel({
-        subscriptionId: planInfo.subscription.id,
-        isTest,
-        prorate: true,
-      });
-    }
-    return { success: true, message: t("billing.downgrade") };
-  }
 
-  return null;
+    // Unknown intent — return null so the loader stays untouched. Logged so
+    // unexpected POSTs that would have caused a silent 500 surface in logs.
+    logError("[billing action] unknown intent:", intent);
+    return { success: false, error: `Unknown intent: ${intent || "(empty)"}` };
+  } catch (e) {
+    logError("[billing action] unhandled exception:", e?.message || e, e?.stack);
+    // Return 200 with error payload so React Router does NOT trigger its
+    // global ErrorBoundary (which renders a generic "Unexpected Server Error"
+    // screen). The client-side UI shows the message inline instead.
+    return { success: false, error: e?.message || "Action failed" };
+  }
 };
 
 const CHECK_ICON = (
@@ -202,10 +232,62 @@ export default function BillingPage() {
   const { locale } = useOutletContext();
   const t = createTranslator(locale);
   const fetcher = useFetcher();
+  const [subscribing, setSubscribing] = useState(false);
+  const [subscribeError, setSubscribeError] = useState(null);
 
   const isPro = planInfo.plan === PLAN_PRO;
-  const loading = fetcher.state !== "idle";
+  const loading = fetcher.state !== "idle" || subscribing;
   const sponsoredOnlyPro = Boolean(planInfo.sponsored && !planInfo.subscription);
+
+  // Top-frame redirect must happen inside this async handler so the click's
+  // transient activation is still alive when we set window.top.location. The
+  // Shopify admin iframe sandbox uses `allow-top-navigation-by-user-activation`,
+  // so a redirect from a useEffect or post-navigation script is blocked. fetch
+  // is awaited once — activation persists across that single await — and the
+  // top redirect runs as the next synchronous statement.
+  const handleStartTrial = async () => {
+    if (subscribing) return;
+    setSubscribing(true);
+    setSubscribeError(null);
+    try {
+      const res = await fetch("/app/billing/subscribe", {
+        method: "POST",
+        headers: { Accept: "application/json" },
+      });
+      // Parse defensively: an auth redirect returns HTML, not JSON, and a raw
+      // `res.json()` would throw an "Unexpected token '<'" error that the
+      // caller can't recover from. Read as text first, then JSON-parse.
+      const text = await res.text();
+      let data;
+      try {
+        data = JSON.parse(text);
+      } catch {
+        setSubscribeError(
+          `Server returned HTML instead of JSON (HTTP ${res.status}). Likely an auth redirect — refresh and try again.`,
+        );
+        setSubscribing(false);
+        return;
+      }
+      if (data.confirmationUrl) {
+        const top = window.top || window.parent || window;
+        try {
+          top.location.href = data.confirmationUrl;
+        } catch {
+          window.location.href = data.confirmationUrl;
+        }
+        return;
+      }
+      if (data.alreadyActive) {
+        window.location.reload();
+        return;
+      }
+      setSubscribeError(data.error || "Subscription failed");
+      setSubscribing(false);
+    } catch (e) {
+      setSubscribeError(e?.message || "Network error");
+      setSubscribing(false);
+    }
+  };
 
   const proFeatures = [
     { label: t("billing.feature_zones_unlimited"), included: true },
@@ -221,10 +303,6 @@ export default function BillingPage() {
     { label: t("billing.feature_csv"), included: true },
     { label: t("billing.feature_product_tags"), included: true },
   ];
-
-  const handleUpgrade = () => {
-    fetcher.submit({ _intent: "subscribe_pro" }, { method: "POST" });
-  };
 
   const handleDowngrade = () => {
     if (sponsoredOnlyPro) {
@@ -277,6 +355,24 @@ export default function BillingPage() {
         </div>
       </div>
 
+      {(fetcher.data?.error || subscribeError) && (
+        <div
+          role="alert"
+          style={{
+            background: "#fef2f2",
+            border: "1px solid #fca5a5",
+            borderRadius: 12,
+            padding: "12px 16px",
+            marginBottom: 16,
+            color: "#991b1b",
+            fontSize: 13,
+            fontWeight: 600,
+          }}
+        >
+          {subscribeError || fetcher.data?.error}
+        </div>
+      )}
+
       {/* Trial banner — only while Shopify reports a live trial window. */}
       {planInfo.subscription?.trial?.active && (
         <div
@@ -307,7 +403,7 @@ export default function BillingPage() {
           features={proFeatures}
           isCurrent={isPro}
           actionLabel={isPro ? t("billing.downgrade") : t("billing.start_trial")}
-          onAction={isPro ? handleDowngrade : handleUpgrade}
+          onAction={isPro ? handleDowngrade : handleStartTrial}
           highlight={!isPro}
           loading={loading}
           trialBadge={!isPro ? t("billing.trial_badge") : undefined}

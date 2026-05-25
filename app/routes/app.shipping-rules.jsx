@@ -17,7 +17,8 @@ import { createTranslator, getLocale } from "../utils/i18n";
 import { debug, error as logError } from "../utils/logger.server";
 import { ensureFletixCarrierService } from "../utils/carrier-service.server";
 import { detectEnabledServicesForDepartment, getServiceAvailabilityByProvince } from "../utils/locations.server";
-import { getShopPlan, checkLimit } from "../utils/billing.server";
+import { getShopPlan, checkLimit, PLAN_LIMITS } from "../utils/billing.server";
+import { PLAN_FREE } from "../utils/billing.constants";
 import prisma from "../db.server";
 
 import MUNICIPALITIES from "../data/municipalities.json";
@@ -201,9 +202,33 @@ function parseCSVContent(csvText, t) {
 
 export const loader = async ({ request }) => {
   const { session, billing, admin } = await authenticate.admin(request);
-  const zones = await getZonesWithRates(session.shop);
-  const defaultZone = await getOrCreateDefaultZone(session.shop);
-  const planInfo = await getShopPlan(billing, session.shop, admin);
+
+  // Each external dependency wrapped so a transient failure renders a degraded
+  // page instead of a 500. Shopify App Review rejects on any uncaught 500.
+  let zones = [];
+  let defaultZone = null;
+  let planInfo;
+  try {
+    zones = await getZonesWithRates(session.shop);
+  } catch (e) {
+    logError("[shipping-rules loader] getZonesWithRates failed:", e?.message || e);
+  }
+  try {
+    defaultZone = await getOrCreateDefaultZone(session.shop);
+  } catch (e) {
+    logError("[shipping-rules loader] getOrCreateDefaultZone failed:", e?.message || e);
+  }
+  try {
+    planInfo = await getShopPlan(billing, session.shop, admin);
+  } catch (e) {
+    logError("[shipping-rules loader] getShopPlan failed:", e?.message || e);
+    planInfo = {
+      plan: PLAN_FREE,
+      limits: PLAN_LIMITS[PLAN_FREE],
+      sponsored: false,
+      subscription: null,
+    };
+  }
   return { zones, defaultZone, planInfo };
 };
 
