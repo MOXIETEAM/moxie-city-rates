@@ -44,7 +44,14 @@ const shopify = shopifyApp({
     : {}),
   hooks: {
     afterAuth: async ({ session, admin }) => {
-      await ensureShopRecord(session.shop);
+      // Best-effort shop bootstrap: a transient Prisma failure must not abort
+      // install. App Review installs on dev stores and any thrown error here
+      // would surface as a broken first-install flow, failing the review.
+      try {
+        await ensureShopRecord(session.shop);
+      } catch (e) {
+        warn("[afterAuth] ensureShopRecord:", e?.message || e);
+      }
       // Best-effort carrier registration so merchant doesn't need to click a button
       // post-install. Helper never throws — install must succeed even if Shopify
       // rejects the carrier (e.g. shop on plan without third-party carriers).
@@ -63,7 +70,7 @@ const shopify = shopifyApp({
 });
 
 export default shopify;
-export const apiVersion = ApiVersion.October25;
+export const apiVersion = ApiVersion.April26;
 export const addDocumentResponseHeaders = shopify.addDocumentResponseHeaders;
 export const authenticate = shopify.authenticate;
 export const unauthenticated = shopify.unauthenticated;

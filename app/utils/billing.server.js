@@ -38,21 +38,27 @@ export const PLAN_LIMITS = {
  *
  * Shopify rejects real charges on partner development stores. Reviewers and
  * partners install on dev stores, so we must pass `isTest: true` on those
- * regardless of NODE_ENV. Falls back to `NODE_ENV !== "production"` if the
- * shop plan lookup fails so local dev keeps working.
+ * regardless of NODE_ENV. Fails open (returns true) when the shop plan lookup
+ * errors so a transient GraphQL failure never produces a real charge on a dev
+ * store during App Review — Shopify rejects real charges on dev stores anyway.
  */
 export async function resolveBillingTestMode(admin) {
   if (process.env.NODE_ENV !== "production") return true;
-  if (!admin) return false;
+  if (!admin) return true;
   try {
     const res = await admin.graphql(
       `query ShopPlanCheck { shop { plan { partnerDevelopment shopifyPlus } } }`,
     );
     const json = await res.json();
-    return json?.data?.shop?.plan?.partnerDevelopment === true;
+    const plan = json?.data?.shop?.plan;
+    if (!plan) {
+      logError("[billing] resolveBillingTestMode: shop.plan missing in response");
+      return true;
+    }
+    return plan.partnerDevelopment === true;
   } catch (e) {
     logError("[billing] resolveBillingTestMode:", e?.message || e);
-    return false;
+    return true;
   }
 }
 
