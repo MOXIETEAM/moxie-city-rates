@@ -45,7 +45,103 @@ export async function ensureFletixCarrierService(admin, shopDomain) {
     `);
     const checkJson = await checkRes.json();
     const existing = checkJson.data?.carrierServices?.nodes || [];
-    const fletix = existing.find((c) => c.name === CARRIER_NAME);
+    // Carrier names are unique per shop ACROSS apps. After a reinstall (or a
+    // different client_id like the fletix / cityrates / demo configs) a stale
+    // "Fletix" carrier can linger: this app can't UPDATE it ("The carrier or
+    // app could not be found.") and can't CREATE one ("Fletix is already
+    // configured."). The only escape is to DELETE the stale carrier (works
+    // when it's our own orphaned record) and create fresh. A truly foreign
+    // carrier (another live app) won't delete — surfaced as a clear error.
+    const deleteCarrier = async (id) => {
+      try {
+        const res = await admin.graphql(
+          `mutation carrierServiceDelete($id: ID!) {
+            carrierServiceDelete(id: $id) { deletedId userErrors { field message } }
+          }`,
+          { variables: { id } },
+        );
+        const json = await res.json();
+        const errs = json.data?.carrierServiceDelete?.userErrors || [];
+        if (errs.length > 0) {
+          warn(`[carrier-service] delete userErrors for ${shopDomain} (${id}):`, errs);
+          return false;
+        }
+        debug(`[carrier-service] ${shopDomain} stale carrier deleted (${id})`);
+        return true;
+      } catch (e) {
+        warn(`[carrier-service] delete threw for ${shopDomain} (${id}):`, e?.message || e);
+        return false;
+      }
+    };
+
+    const rawCreate = async () => {
+      const createRes = await admin.graphql(
+        `mutation carrierServiceCreate($input: DeliveryCarrierServiceCreateInput!) {
+          carrierServiceCreate(input: $input) {
+            carrierService { id name active }
+            userErrors { field message }
+          }
+        }`,
+        {
+          variables: {
+            input: {
+              name: CARRIER_NAME,
+              callbackUrl,
+              active: true,
+              supportsServiceDiscovery: true,
+            },
+          },
+        },
+      );
+      const createJson = await createRes.json();
+      const errs = createJson.data?.carrierServiceCreate?.userErrors || [];
+      const id = createJson.data?.carrierServiceCreate?.carrierService?.id;
+      return { errs, id };
+    };
+
+    // Create, reclaiming the name from a stale carrier once if needed.
+    const createCarrier = async () => {
+      let { errs, id } = await rawCreate();
+      if (errs.length > 0) {
+        const nameTaken = errs.some((e) => /already configured|already exists|taken/i.test(e.message || ""));
+        if (nameTaken) {
+          // Re-query and delete every carrier with our name, then retry once.
+          const reRes = await admin.graphql(
+            `query { carrierServices(first: 25) { nodes { id name } } }`,
+          );
+          const reJson = await reRes.json();
+          const staleNamed = (reJson.data?.carrierServices?.nodes || []).filter((c) => c.name === CARRIER_NAME);
+          let deletedAny = false;
+          for (const c of staleNamed) {
+            if (await deleteCarrier(c.id)) deletedAny = true;
+          }
+          if (deletedAny) {
+            ({ errs, id } = await rawCreate());
+          }
+        }
+      }
+      if (errs.length > 0) {
+        // Could not register — foreign carrier owns the name, shop ineligible,
+        // or protected carrier. Non-blocking so install continues.
+        warn(`[carrier-service] create userErrors for ${shopDomain}:`, errs);
+        return {
+          status: "skipped",
+          errors: errs.map((e) => e.message),
+          hint: `A carrier named "${CARRIER_NAME}" exists but this app can't manage it. Remove it from the shop (Settings → Shipping, or via another app/the Shopify admin) and re-register.`,
+        };
+      }
+      debug(`[carrier-service] ${shopDomain} carrier created (${id})`);
+      return { status: "created", id };
+    };
+
+    // Prefer OUR carrier (callbackUrl on our app host) over a same-named one
+    // from another app, so we don't keep churning a foreign record.
+    const appBase = (process.env.SHOPIFY_APP_URL || process.env.HOST || "").replace(/\/$/, "");
+    const named = existing.filter((c) => c.name === CARRIER_NAME);
+    const fletix =
+      named.find((c) => c.callbackUrl === callbackUrl) ||
+      (appBase && named.find((c) => (c.callbackUrl || "").startsWith(appBase))) ||
+      named[0];
 
     if (fletix) {
       // Skip update if config already current — avoids extra mutation on every login.
@@ -66,42 +162,17 @@ export async function ensureFletixCarrierService(admin, shopDomain) {
       const updateJson = await updateRes.json();
       const errs = updateJson.data?.carrierServiceUpdate?.userErrors || [];
       if (errs.length > 0) {
-        logError(`[carrier-service] update userErrors for ${shopDomain}:`, errs);
-        return { status: "skipped", id: fletix.id, errors: errs.map((e) => e.message) };
+        // Stale/orphaned carrier — can't update. Delete it (best effort) and
+        // recreate, which also reclaims the unique name.
+        warn(`[carrier-service] ${shopDomain} update failed (${fletix.id}), deleting+recreating:`, errs);
+        await deleteCarrier(fletix.id);
+        return createCarrier();
       }
       debug(`[carrier-service] ${shopDomain} carrier updated (${fletix.id})`);
       return { status: "updated", id: fletix.id };
     }
 
-    const createRes = await admin.graphql(
-      `mutation carrierServiceCreate($input: DeliveryCarrierServiceCreateInput!) {
-        carrierServiceCreate(input: $input) {
-          carrierService { id name active }
-          userErrors { field message }
-        }
-      }`,
-      {
-        variables: {
-          input: {
-            name: CARRIER_NAME,
-            callbackUrl,
-            active: true,
-            supportsServiceDiscovery: true,
-          },
-        },
-      },
-    );
-    const createJson = await createRes.json();
-    const errs = createJson.data?.carrierServiceCreate?.userErrors || [];
-    if (errs.length > 0) {
-      // PROTECTED_CARRIER_SERVICE / SHOP_INELIGIBLE → not all stores can register carriers.
-      // Log as warn (not blocking) so install continues.
-      warn(`[carrier-service] create userErrors for ${shopDomain}:`, errs);
-      return { status: "skipped", errors: errs.map((e) => e.message) };
-    }
-    const id = createJson.data?.carrierServiceCreate?.carrierService?.id;
-    debug(`[carrier-service] ${shopDomain} carrier created (${id})`);
-    return { status: "created", id };
+    return createCarrier();
   } catch (e) {
     logError(`[carrier-service] ensure failed for ${shopDomain}:`, e?.message || e);
     return { status: "skipped", errors: [e?.message || String(e)] };

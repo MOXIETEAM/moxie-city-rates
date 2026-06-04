@@ -2,19 +2,15 @@
 
 client_id = "8c228546203c5dd03577b1b608bd1075"
 name = "City Rates Custom"
-handle = "city-rates-custom"
 application_url = "https://moxie-city-rates-test.onrender.com"
 embedded = true
+handle = "city-rates-custom"
 
 [build]
 automatically_update_urls_on_dev = true
 
 [webhooks]
 api_version = "2026-04"
-
-  [[webhooks.subscriptions]]
-  uri = "/webhooks/compliance"
-  compliance_topics = [ "customers/data_request", "customers/redact", "shop/redact" ]
 
   [[webhooks.subscriptions]]
   topics = [ "app/scopes_update" ]
@@ -24,9 +20,13 @@ api_version = "2026-04"
   topics = [ "app/uninstalled" ]
   uri = "/webhooks/app/uninstalled"
 
+  [[webhooks.subscriptions]]
+  uri = "/webhooks/compliance"
+  compliance_topics = [ "customers/data_request", "customers/redact", "shop/redact" ]
+
 [access_scopes]
 # Learn more at https://shopify.dev/docs/apps/tools/cli/configuration#access_scopes
-scopes = "read_shipping,write_shipping,read_locations,read_products"
+scopes = "read_locations,read_products,read_shipping,write_shipping"
 
 [auth]
 redirect_urls = [ "https://moxie-city-rates-test.onrender.com/api/auth" ]

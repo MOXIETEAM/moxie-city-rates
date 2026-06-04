@@ -15,6 +15,19 @@ model AppShop {
   shop           String   @id
   sponsoredPro   Boolean  @default(false)
   note           String?
+  // Captured at install/re-auth from `shop { currencyCode ianaTimezone
+  // billingAddress { countryCodeV2 } }`. Drives currency labels in the admin,
+  // the currency code returned to Shopify at checkout, per-shop schedule
+  // timezone, and the default country for new zones. Nullable so rows created
+  // before this column existed (or a transient Admin API failure at install)
+  // fall back to sane defaults (COP / America/Bogota / CO) at the call site.
+  currency       String?
+  ianaTimezone   String?
+  country        String?
+  // City fuzzy-match threshold as a percentage (0-100). At checkout a customer
+  // city is homologated to a configured city/alias when their similarity ratio
+  // (1 - levenshtein/maxLen) is >= this / 100. Default 85.
+  cityMatchThreshold Int  @default(85)
   createdAt      DateTime @default(now())
   updatedAt      DateTime @updatedAt
 }
@@ -44,8 +57,15 @@ model Session {
 model ShippingZone {
   id              String         @id @default(cuid())
   shop            String
-  department      String          // "Antioquia", "Bogotá D.C."
-  slug            String          // "antioquia", "bogota_d_c"
+  // ISO 3166-1 alpha-2 of the country this zone belongs to. Defaults to "CO"
+  // so existing rows (created before internationalization) keep their Colombian
+  // semantics. Used to gate the Colombian city catalog/fuzzy resolver, pick the
+  // admin subdivision list, and label currency — NOT part of the lookup key.
+  // `slug` stays unique per shop (see @@unique) so deployed storefront themes
+  // that read rules keyed by the existing CO slugs are unaffected.
+  country         String         @default("CO")
+  department      String          // display label: "Antioquia" (CO) / "California" (US)
+  slug            String          // CO: name-based ("antioquia"); other: province-code-based ("ca")
   enabled         Boolean        @default(true)
   // JSON array of service codes available in this zone — derived from Shopify Locations
   // at zone creation, then editable by the merchant. Defaults to all 3 to preserve legacy
@@ -64,10 +84,20 @@ model ShippingRate {
   zone          ShippingZone @relation(fields: [zoneId], references: [id], onDelete: Cascade)
   name          String       // "Envío Express", "Envío Estándar"
   serviceCode   String       // "mox_express", "mox_envio"
-  price         Int          // COP enteros: 12000
+  // Amount in MAJOR currency units of the shop currency. Float so currencies
+  // with minor units work (USD 12.99); zero-decimal currencies (COP 12000)
+  // store whole numbers. Shopify's carrier/total_price hundredths convention
+  // (amount * 100) holds across currencies, so existing COP values are
+  // unchanged by the Int→Float migration.
+  price         Float        // major units: 12000 (COP) | 12.99 (USD)
   description   String       @default("")
   cityCondition String       @default("all") // "all" | "include" | "exclude"
   cities        String       @default("[]")  // JSON array: '["MEDELLÍN","BELLO"]'
+  // Merchant-defined nicknames/variants per city for checkout homologation.
+  // JSON map canonical→aliases: '{"MEDELLÍN":["medallo","medeya"]}'. Combined
+  // with fuzzy matching: a customer city matches when it's within the shop's
+  // threshold of any city OR any of its aliases. Additive — empty by default.
+  cityAliases   String       @default("{}")
   timeFrom      String?      // "08:00" — hora inicio (Colombia UTC-5), null = sin restricción
   timeTo        String?      // "13:00" — hora fin, null = sin restricción
   daysOfWeek    String       @default("[]") // JSON array: '["mon","tue","wed","thu","fri"]', [] = todos

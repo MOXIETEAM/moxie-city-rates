@@ -1,5 +1,5 @@
 import { useFetcher, useLoaderData, useOutletContext, useRouteError } from "react-router";
-import { useState, useEffect, useCallback, useRef, useMemo } from "react";
+import { useState, useEffect, useCallback, useRef, useMemo, createContext, useContext } from "react";
 import { useAppBridge } from "@shopify/app-bridge-react";
 import { boundary } from "@shopify/shopify-app-react-router/server";
 import { authenticate } from "../shopify.server";
@@ -19,9 +19,19 @@ import { ensureFletixCarrierService } from "../utils/carrier-service.server";
 import { detectEnabledServicesForDepartment, getServiceAvailabilityByProvince } from "../utils/locations.server";
 import { getShopPlan, checkLimit, PLAN_LIMITS } from "../utils/billing.server";
 import { PLAN_FREE, PLAN_PRO } from "../utils/billing.constants";
+import { getShopMeta } from "../utils/shop-record.server";
 import prisma from "../db.server";
 
 import MUNICIPALITIES from "../data/municipalities.json";
+import { getSubdivisions, isSupportedCountry, formatMoney } from "../utils/geo";
+
+// Shop currency + subdivision list, provided once at the page root so the
+// nested rate/zone components format money in the shop currency and offer the
+// right regions without prop-drilling. Defaults keep the legacy CO behavior.
+const ShopMetaContext = createContext({ currency: "COP", subdivisions: [] });
+function useShopCurrency() {
+  return useContext(ShopMetaContext).currency || "COP";
+}
 
 const DEPARTMENTS = [
   "Amazonas", "Antioquia", "Arauca", "Atlántico", "Bogotá D.C.", "Bolívar",
@@ -111,7 +121,10 @@ function parseCSVContent(csvText, t) {
 
     const [dept, name, serviceCode, priceStr, condition, citiesStr, description, timeFrom, timeTo, daysStr, pricingModeStr, weightTiersStr, cartTotalTiersStr, productConditionStr, productTagsStr] = fields;
 
-    if (!dept || !DEPARTMENTS.includes(dept)) {
+    // Accept any non-empty region name. Membership in a fixed list can't be
+    // enforced internationally (zones now span multiple countries); the zone
+    // slug is derived from the name and matched the same way at checkout.
+    if (!dept) {
       errors.push(t("csv.invalid_department", { n: lineNum, dept }));
       continue;
     }
@@ -208,13 +221,20 @@ export const loader = async ({ request }) => {
   let zones = [];
   let defaultZone = null;
   let planInfo;
+  // Shop currency / timezone / country — replaces the Colombia-only DEPARTMENTS
+  // list, COP labels and es-CO number formatting. Never throws (falls back to
+  // CO / COP for older rows).
+  const shopMeta = await getShopMeta(session.shop);
+  const subdivisions = isSupportedCountry(shopMeta.country)
+    ? getSubdivisions(shopMeta.country).map((s) => s.name)
+    : [];
   try {
     zones = await getZonesWithRates(session.shop);
   } catch (e) {
     logError("[shipping-rules loader] getZonesWithRates failed:", e?.message || e);
   }
   try {
-    defaultZone = await getOrCreateDefaultZone(session.shop);
+    defaultZone = await getOrCreateDefaultZone(session.shop, shopMeta.country);
   } catch (e) {
     logError("[shipping-rules loader] getOrCreateDefaultZone failed:", e?.message || e);
   }
@@ -249,6 +269,10 @@ export const loader = async ({ request }) => {
     planInfo,
     planSelectionUrl,
     billingMode: process.env.BILLING_MODE === "managed" ? "managed" : "api",
+    shopCountry: shopMeta.country,
+    shopCurrency: shopMeta.currency,
+    cityMatchThreshold: shopMeta.cityMatchThreshold,
+    subdivisions,
   };
 };
 
@@ -258,6 +282,7 @@ export const action = async ({ request }) => {
   const locale = getLocale(url.searchParams.get("locale"));
   const t = createTranslator(locale);
   const planInfo = await getShopPlan(billing, session.shop, admin);
+  const shopMeta = await getShopMeta(session.shop);
   const formData = await request.formData();
   const intent = formData.get("_intent");
 
@@ -275,7 +300,7 @@ export const action = async ({ request }) => {
       // merchant's Shopify Locations. Falls back to all services on any failure.
       const enabledServices = await detectEnabledServicesForDepartment(admin, department);
 
-      await createZone(session.shop, department, enabledServices);
+      await createZone(session.shop, department, enabledServices, shopMeta.country);
       await syncRulesToMetafield(admin, session.shop);
       return { success: true, message: t("action.zone_created", { dept: department }) };
     }
@@ -298,6 +323,18 @@ export const action = async ({ request }) => {
       await deleteZone(zoneId, session.shop);
       await syncRulesToMetafield(admin, session.shop);
       return { success: true, message: t("action.zone_deleted") };
+    }
+
+    if (intent === "update_threshold") {
+      const raw = parseInt(formData.get("cityMatchThreshold"), 10);
+      // Clamp 50-100. Below 50 fuzzy matching is too loose to be safe.
+      const value = Number.isNaN(raw) ? 85 : Math.min(100, Math.max(50, raw));
+      await prisma.appShop.upsert({
+        where: { shop: session.shop },
+        create: { shop: session.shop, cityMatchThreshold: value },
+        update: { cityMatchThreshold: value },
+      });
+      return { success: true, message: t("action.threshold_updated", { value }) };
     }
 
     if (intent === "save_rate") {
@@ -345,6 +382,24 @@ export const action = async ({ request }) => {
         citiesJson = JSON.stringify(citiesArray);
       }
 
+      // Per-city aliases for fuzzy homologation. Keys uppercased to match the
+      // canonical cities stored above; values trimmed, empties dropped.
+      let cityAliasesJson = "{}";
+      if (cityCondition !== "all") {
+        try {
+          const raw = JSON.parse(formData.get("city_aliases_input") || "{}");
+          const norm = {};
+          for (const [k, v] of Object.entries(raw)) {
+            const key = String(k).trim().toUpperCase();
+            const arr = Array.isArray(v) ? v.map((x) => String(x).trim()).filter(Boolean) : [];
+            if (key && arr.length) norm[key] = arr;
+          }
+          cityAliasesJson = JSON.stringify(norm);
+        } catch {
+          // Malformed alias payload — persist empty map rather than fail save.
+        }
+      }
+
       const daysJson = daysRaw.length > 0 ? JSON.stringify(daysRaw) : "[]";
 
       await saveRate({
@@ -357,6 +412,7 @@ export const action = async ({ request }) => {
         description: formData.get("description"),
         cityCondition,
         cities: citiesJson,
+        cityAliases: cityAliasesJson,
         timeFrom,
         timeTo,
         daysOfWeek: daysJson,
@@ -432,7 +488,7 @@ export const action = async ({ request }) => {
           const enabledServices = locationsMap[slug] ?? locationsMap.default ?? [
             "mox_envio", "mox_express", "mox_pickup",
           ];
-          const newZone = await createZone(session.shop, row.department, enabledServices);
+          const newZone = await createZone(session.shop, row.department, enabledServices, shopMeta.country);
           zoneByDept[row.department] = newZone;
           zonesCreated++;
         }
@@ -476,19 +532,42 @@ export const action = async ({ request }) => {
 
 // --- Components ---
 
-function CityPicker({ department, selectedCities, onChange }) {
+function CityPicker({ department, selectedCities, onChange, aliases = {}, onAliasesChange }) {
+  // The municipality catalog is Colombia-only. For zones in other countries it
+  // is empty, so fall back to free-text entry (merchant types the city name,
+  // normalized the same way at checkout).
   const municipalities = MUNICIPALITIES[department] || [];
-  if (!municipalities.length) return null;
+  const hasCatalog = municipalities.length > 0;
+
+  const addCity = (val) => {
+    const city = (val || "").trim();
+    if (!city || selectedCities.some((c) => c.toUpperCase() === city.toUpperCase())) return;
+    onChange([...selectedCities, city]);
+  };
 
   const handleAdd = (e) => {
-    const val = e.target.value;
-    if (!val || selectedCities.includes(val)) return;
-    onChange([...selectedCities, val]);
+    addCity(e.target.value);
     e.target.value = "";
   };
 
   const handleRemove = (city) => {
     onChange(selectedCities.filter((c) => c !== city));
+    // Drop the removed city's aliases so the stored map stays clean.
+    if (onAliasesChange && aliases[city]) {
+      const next = { ...aliases };
+      delete next[city];
+      onAliasesChange(next);
+    }
+  };
+
+  // Aliases edited as a comma-separated string per city ("medallo, medeya").
+  const handleAliasChange = (city, raw) => {
+    if (!onAliasesChange) return;
+    const list = raw.split(",").map((s) => s.trim()).filter(Boolean);
+    const next = { ...aliases };
+    if (list.length) next[city] = list;
+    else delete next[city];
+    onAliasesChange(next);
   };
 
   return (
@@ -496,41 +575,68 @@ function CityPicker({ department, selectedCities, onChange }) {
       <label style={{ display: "block", fontSize: "13px", fontWeight: 600, marginBottom: "4px" }}>
         Ciudades
       </label>
-      <select
-        onChange={handleAdd}
-        defaultValue=""
-        style={{ padding: "8px 12px", borderRadius: "8px", border: "1px solid #ccc", minWidth: "250px", marginBottom: "8px" }}
-      >
-        <option value="">Agregar ciudad...</option>
-        {municipalities
-          .filter((m) => !selectedCities.includes(m))
-          .map((m) => (
-            <option key={m} value={m}>{titleCase(m)}</option>
-          ))}
-      </select>
+      {hasCatalog ? (
+        <select
+          onChange={handleAdd}
+          defaultValue=""
+          style={{ padding: "8px 12px", borderRadius: "8px", border: "1px solid #ccc", minWidth: "250px", marginBottom: "8px" }}
+        >
+          <option value="">Agregar ciudad...</option>
+          {municipalities
+            .filter((m) => !selectedCities.includes(m))
+            .map((m) => (
+              <option key={m} value={m}>{titleCase(m)}</option>
+            ))}
+        </select>
+      ) : (
+        <input
+          type="text"
+          placeholder="Escribir ciudad y Enter..."
+          onKeyDown={(e) => {
+            if (e.key === "Enter") {
+              e.preventDefault();
+              addCity(e.target.value);
+              e.target.value = "";
+            }
+          }}
+          onBlur={(e) => { addCity(e.target.value); e.target.value = ""; }}
+          style={{ padding: "8px 12px", borderRadius: "8px", border: "1px solid #ccc", minWidth: "250px", marginBottom: "8px" }}
+        />
+      )}
       {selectedCities.length > 0 && (
-        <div style={{ display: "flex", flexWrap: "wrap", gap: "4px" }}>
+        <div style={{ display: "flex", flexDirection: "column", gap: "6px", marginTop: "4px" }}>
           {selectedCities.map((city) => (
-            <span
-              key={city}
-              style={{
-                display: "inline-flex", alignItems: "center", gap: "4px",
-                padding: "4px 10px", borderRadius: "999px",
-                background: "#e5e5e5", fontSize: "12px", fontWeight: 600,
-              }}
-            >
-              {titleCase(city)}
-              <button
-                type="button"
-                onClick={() => handleRemove(city)}
+            <div key={city} style={{ display: "flex", alignItems: "center", gap: "8px", flexWrap: "wrap" }}>
+              <span
                 style={{
-                  border: "none", background: "none", cursor: "pointer",
-                  fontSize: "14px", lineHeight: 1, padding: 0, color: "#666",
+                  display: "inline-flex", alignItems: "center", gap: "4px",
+                  padding: "4px 10px", borderRadius: "999px",
+                  background: "#e5e5e5", fontSize: "12px", fontWeight: 600,
+                  minWidth: "110px", justifyContent: "space-between",
                 }}
               >
-                ×
-              </button>
-            </span>
+                {titleCase(city)}
+                <button
+                  type="button"
+                  onClick={() => handleRemove(city)}
+                  style={{
+                    border: "none", background: "none", cursor: "pointer",
+                    fontSize: "14px", lineHeight: 1, padding: 0, color: "#666",
+                  }}
+                >
+                  ×
+                </button>
+              </span>
+              {/* Variantes/apodos: el comprador puede escribir cualquiera y se
+                  homologa por fuzzy a esta ciudad en checkout. */}
+              <input
+                type="text"
+                defaultValue={(aliases[city] || []).join(", ")}
+                onBlur={(e) => handleAliasChange(city, e.target.value)}
+                placeholder="variantes: medallo, medeya…"
+                style={{ flex: 1, minWidth: "200px", padding: "6px 10px", borderRadius: "8px", border: "1px solid #ddd", fontSize: "12px" }}
+              />
+            </div>
           ))}
         </div>
       )}
@@ -543,6 +649,7 @@ function titleCase(str) {
 }
 
 function WeightTierEditor({ tiers, onChange, t }) {
+  const currency = useShopCurrency();
   const handleTierChange = (index, field, value) => {
     const updated = [...tiers];
     updated[index] = { ...updated[index], [field]: Number(value) || 0 };
@@ -602,8 +709,9 @@ function WeightTierEditor({ tiers, onChange, t }) {
             onChange={(e) => handleTierChange(i, "price", e.target.value)}
             style={{ width: "110px", padding: "6px 8px", borderRadius: "6px", border: "1px solid #ccc", textAlign: "right" }}
             min="0"
+            step="any"
           />
-          <span style={{ fontSize: "12px", color: "#666" }}>COP</span>
+          <span style={{ fontSize: "12px", color: "#666" }}>{currency}</span>
           <button
             type="button"
             onClick={() => removeTier(i)}
@@ -824,11 +932,20 @@ function RateForm({ rate, zoneId, department, onCancel, t, planLimits, enabledSe
     allowedServices.includes(sc.value),
   );
   const fallbackService = availableServiceCodes[0]?.value || "mox_envio";
+  const currency = useShopCurrency();
   const fetcher = useFetcher();
   const [cityCondition, setCityCondition] = useState(rate?.cityCondition || "all");
   const [selectedCities, setSelectedCities] = useState(
     rate?.cities ? JSON.parse(rate.cities) : []
   );
+  // Map canonical city -> array of merchant-defined aliases for fuzzy homologation.
+  const [cityAliases, setCityAliases] = useState(() => {
+    try {
+      return rate?.cityAliases ? JSON.parse(rate.cityAliases) : {};
+    } catch {
+      return {};
+    }
+  });
   const [pricingMode, setPricingMode] = useState(rate?.pricingMode || "flat");
   const [productCondition, setProductCondition] = useState(rate?.productCondition || "all");
   const [productTags, setProductTags] = useState(
@@ -919,9 +1036,10 @@ function RateForm({ rate, zoneId, department, onCancel, t, planLimits, enabledSe
           </div>
           {pricingMode === "flat" && (
             <s-text-field
-              label={t("shipping.price_cop")}
+              label={t("shipping.price_cop", { currency })}
               name="price"
               type="number"
+              step="any"
               value={String(rate?.price || "")}
               required
               style={{ maxWidth: "140px" }}
@@ -1038,10 +1156,14 @@ function RateForm({ rate, zoneId, department, onCancel, t, planLimits, enabledSe
             department={department}
             selectedCities={selectedCities}
             onChange={setSelectedCities}
+            aliases={cityAliases}
+            onAliasesChange={setCityAliases}
           />
         )}
         {/* Hidden: ciudades como texto separado por comas para el action */}
         <input type="hidden" name="cities_input" value={selectedCities.join(", ")} />
+        {/* Hidden: alias por ciudad (JSON) para homologación fuzzy en checkout */}
+        <input type="hidden" name="city_aliases_input" value={JSON.stringify(cityAliases)} />
 
         <div>
           <label style={{ display: "block", fontSize: "13px", fontWeight: 600, marginBottom: "4px" }}>
@@ -1168,7 +1290,7 @@ function RateForm({ rate, zoneId, department, onCancel, t, planLimits, enabledSe
           <ul style={{ margin: "4px 0 0 16px", padding: 0 }}>
             <li>{t("shipping.required_name")}</li>
             <li>{t("shipping.required_service")}</li>
-            <li>{t("shipping.required_price")}</li>
+            <li>{t("shipping.required_price", { currency })}</li>
           </ul>
           <div style={{ marginTop: 6, color: "#6d7175" }}>
             {t("shipping.required_optional_hint")}
@@ -1192,6 +1314,7 @@ function RateForm({ rate, zoneId, department, onCancel, t, planLimits, enabledSe
 
 function RateCard({ rate, zoneId, department, t, planInfo, enabledServices }) {
   const deleteFetcher = useFetcher();
+  const currency = useShopCurrency();
   const [editing, setEditing] = useState(false);
   const isDeleting = deleteFetcher.state !== "idle";
 
@@ -1257,7 +1380,7 @@ function RateCard({ rate, zoneId, department, t, planInfo, enabledServices }) {
             <s-badge tone="info">{t("shipping.by_cart_total")}</s-badge>
           ) : (
             <span style={{ fontWeight: 700, fontSize: "14px" }}>
-              {rate.price > 0 ? `$${rate.price.toLocaleString("es-CO")}` : t("shipping.free")}
+              {rate.price > 0 ? formatMoney(rate.price, currency) : t("shipping.free")}
             </span>
           )}
         </div>
@@ -1268,7 +1391,7 @@ function RateCard({ rate, zoneId, department, t, planInfo, enabledServices }) {
                 padding: "2px 8px", borderRadius: "4px",
                 background: "#f0f4ff", border: "1px solid #d0d8f0",
               }}>
-                {tier.minKg}–{tier.maxKg}kg: ${tier.price.toLocaleString("es-CO")}
+                {tier.minKg}–{tier.maxKg}kg: {formatMoney(tier.price, currency)}
               </span>
             ))}
           </div>
@@ -1278,13 +1401,13 @@ function RateCard({ rate, zoneId, department, t, planInfo, enabledServices }) {
             {cartTotalTiersList.map((tier, i) => {
               const maxLabel = !tier.maxAmount || tier.maxAmount === 0
                 ? "+"
-                : `–$${tier.maxAmount.toLocaleString("es-CO")}`;
+                : `–${formatMoney(tier.maxAmount, currency)}`;
               return (
                 <span key={i} style={{
                   padding: "2px 8px", borderRadius: "4px",
                   background: "#f0fff4", border: "1px solid #b2dfdb",
                 }}>
-                  ${tier.minAmount.toLocaleString("es-CO")}{maxLabel}: {tier.price > 0 ? `$${tier.price.toLocaleString("es-CO")}` : t("shipping.free")}
+                  {formatMoney(tier.minAmount, currency)}{maxLabel}: {tier.price > 0 ? formatMoney(tier.price, currency) : t("shipping.free")}
                 </span>
               );
             })}
@@ -1510,7 +1633,7 @@ function downloadCSV(content, filename) {
 // --- Page ---
 
 export default function ShippingRules() {
-  const { zones: allZones, defaultZone, planInfo, planSelectionUrl, billingMode } = useLoaderData();
+  const { zones: allZones, defaultZone, planInfo, planSelectionUrl, billingMode, shopCurrency, subdivisions, cityMatchThreshold } = useLoaderData();
   const { locale } = useOutletContext();
   const t = createTranslator(locale);
   const zones = allZones.filter((z) => z.slug !== "_default");
@@ -1520,6 +1643,7 @@ export default function ShippingRules() {
   const syncFetcher = useFetcher();
   const carrierFetcher = useFetcher();
   const csvFetcher = useFetcher();
+  const thresholdFetcher = useFetcher();
   const fileInputRef = useRef(null);
   const shopify = useAppBridge();
   const isCreating = createFetcher.state !== "idle";
@@ -1528,7 +1652,11 @@ export default function ShippingRules() {
   const isCsvLoading = csvFetcher.state !== "idle";
 
   const existingSlugs = new Set(zones.map((z) => z.slug));
-  const availableDepartments = DEPARTMENTS.filter((d) => {
+  // Subdivisions of the shop country (from the loader). Empty when the shop
+  // country isn't in our dataset \u2014 the add-zone UI then offers free-text entry.
+  const regionList = subdivisions && subdivisions.length > 0 ? subdivisions : DEPARTMENTS;
+  const hasRegionCatalog = subdivisions && subdivisions.length > 0;
+  const availableDepartments = regionList.filter((d) => {
     const slug = d.toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "").replace(/[^a-z0-9]+/g, "_").replace(/^_|_$/g, "");
     return !existingSlugs.has(slug);
   });
@@ -1543,6 +1671,7 @@ export default function ShippingRules() {
   useEffect(() => { showToast(syncFetcher.data); }, [syncFetcher.data, showToast]);
   useEffect(() => { showToast(carrierFetcher.data); }, [carrierFetcher.data, showToast]);
   useEffect(() => { showToast(csvFetcher.data); }, [csvFetcher.data, showToast]);
+  useEffect(() => { showToast(thresholdFetcher.data); }, [thresholdFetcher.data, showToast]);
 
   const handleFileSelect = useCallback((event) => {
     if (!csvAllowed) {
@@ -1578,6 +1707,7 @@ export default function ShippingRules() {
   const canAddDefaultRate = defaultZone.rates.length < planInfo.limits.maxRatesPerZone;
 
   return (
+    <ShopMetaContext.Provider value={{ currency: shopCurrency, subdivisions }}>
     <s-page
       heading={t("shipping.title")}
       subtitle={t("shipping.subtitle")}
@@ -1711,16 +1841,28 @@ export default function ShippingRules() {
           <s-stack direction="block" gap="small">
             <s-stack direction="inline" gap="base">
               <div>
-                <select
-                  name="department"
-                  disabled={!canAddZone}
-                  style={{ padding: "8px 12px", borderRadius: "8px", border: "1px solid #ccc", minWidth: "200px" }}
-                >
-                  <option value="">{t("shipping.select_department")}</option>
-                  {availableDepartments.map((d) => (
-                    <option key={d} value={d}>{d}</option>
-                  ))}
-                </select>
+                {hasRegionCatalog ? (
+                  <select
+                    name="department"
+                    disabled={!canAddZone}
+                    style={{ padding: "8px 12px", borderRadius: "8px", border: "1px solid #ccc", minWidth: "200px" }}
+                  >
+                    <option value="">{t("shipping.select_department")}</option>
+                    {availableDepartments.map((d) => (
+                      <option key={d} value={d}>{d}</option>
+                    ))}
+                  </select>
+                ) : (
+                  // Shop country not in our subdivision dataset — let the merchant
+                  // type the region name. slug = toSlug(name) matches checkout.
+                  <input
+                    type="text"
+                    name="department"
+                    disabled={!canAddZone}
+                    placeholder={t("shipping.select_department")}
+                    style={{ padding: "8px 12px", borderRadius: "8px", border: "1px solid #ccc", minWidth: "200px" }}
+                  />
+                )}
               </div>
               <s-button type="submit" variant="primary" loading={isCreating} disabled={!canAddZone}>
                 {t("shipping.add_zone")}
@@ -1731,6 +1873,30 @@ export default function ShippingRules() {
             )}
           </s-stack>
         </createFetcher.Form>
+      </s-section>
+
+      <s-section heading={t("shipping.city_match_title")}>
+        <thresholdFetcher.Form method="post">
+          <input type="hidden" name="_intent" value="update_threshold" />
+          <s-stack direction="block" gap="small">
+            <s-text variant="bodySm" tone="subdued">{t("shipping.city_match_hint")}</s-text>
+            <s-stack direction="inline" gap="base">
+              <input
+                type="number"
+                name="cityMatchThreshold"
+                defaultValue={cityMatchThreshold ?? 85}
+                min="50"
+                max="100"
+                step="1"
+                style={{ width: "90px", padding: "8px 12px", borderRadius: "8px", border: "1px solid #ccc", textAlign: "right" }}
+              />
+              <span style={{ alignSelf: "center", fontSize: "12px", color: "#666" }}>%</span>
+              <s-button type="submit" variant="primary" loading={thresholdFetcher.state !== "idle"}>
+                {t("shipping.city_match_save")}
+              </s-button>
+            </s-stack>
+          </s-stack>
+        </thresholdFetcher.Form>
       </s-section>
 
       <s-section slot="aside" heading={t("shipping.aside_title")}>
@@ -1849,6 +2015,7 @@ export default function ShippingRules() {
         </s-stack>
       </s-section>
     </s-page>
+    </ShopMetaContext.Provider>
   );
 }
 

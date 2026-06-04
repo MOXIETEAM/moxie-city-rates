@@ -20,46 +20,9 @@ import { checkLimit, getShopPlanForStorefront } from "../utils/billing.server";
 import prisma from "../db.server";
 import { verifyAppProxyOrUnauthorized } from "../utils/app-proxy-auth.server";
 import { consume, getClientIp, rateLimitedResponse } from "../utils/rate-limit.server";
+import { provinceToSlug, provinceDisplayName, formatMoney } from "../utils/geo";
+import { getShopMeta } from "../utils/shop-record.server";
 
-const PROVINCE_CODE_TO_SLUG = {
-  AMA: "amazonas", ANT: "antioquia", ARA: "arauca", ATL: "atlantico",
-  DC: "bogota_d_c", BOL: "bolivar", BOY: "boyaca", CAL: "caldas",
-  CAQ: "caqueta", CAS: "casanare", CAU: "cauca", CES: "cesar",
-  CHO: "choco", COR: "cordoba", CUN: "cundinamarca", GUA: "guainia",
-  GUV: "guaviare", HUI: "huila", LAG: "la_guajira", MAG: "magdalena",
-  MET: "meta", NAR: "narino", NSA: "norte_de_santander", PUT: "putumayo",
-  QUI: "quindio", RIS: "risaralda", SAP: "san_andres_providencia_y_santa_catalina",
-  SAN: "santander", SUC: "sucre", TOL: "tolima", VAC: "valle_del_cauca",
-  VAU: "vaupes", VID: "vichada",
-};
-
-const SLUG_TO_DEPARTMENT = {
-  amazonas: "Amazonas", antioquia: "Antioquia", arauca: "Arauca", atlantico: "Atlántico",
-  bogota_d_c: "Bogotá D.C.", bolivar: "Bolívar", boyaca: "Boyacá", caldas: "Caldas",
-  caqueta: "Caquetá", casanare: "Casanare", cauca: "Cauca", cesar: "Cesar",
-  choco: "Chocó", cordoba: "Córdoba", cundinamarca: "Cundinamarca", guainia: "Guainía",
-  guaviare: "Guaviare", huila: "Huila", la_guajira: "La Guajira", magdalena: "Magdalena",
-  meta: "Meta", narino: "Nariño", norte_de_santander: "Norte de Santander", putumayo: "Putumayo",
-  quindio: "Quindío", risaralda: "Risaralda", san_andres_providencia_y_santa_catalina: "San Andrés",
-  santander: "Santander", sucre: "Sucre", tolima: "Tolima", valle_del_cauca: "Valle del Cauca",
-  vaupes: "Vaupés", vichada: "Vichada",
-};
-
-function toSlug(str) {
-  return str
-    .toLowerCase()
-    .normalize("NFD")
-    .replace(/[\u0300-\u036f]/g, "")
-    .replace(/[^a-z0-9]+/g, "_")
-    .replace(/^_|_$/g, "");
-}
-
-function resolveProvinceSlug(province) {
-  if (!province) return null;
-  const fromCode = PROVINCE_CODE_TO_SLUG[province.toUpperCase()];
-  if (fromCode) return fromCode;
-  return toSlug(province);
-}
 
 function resolveRatePrice(rate, weightKg, cartTotal) {
   if (rate.pricingMode === "weight_tiers" && weightKg !== null) {
@@ -124,7 +87,7 @@ const CORS_HEADERS = {
   "Access-Control-Allow-Headers": "Content-Type",
 };
 
-async function calculateRates({ shop, province, city, weightKg, cartTotal, productIds }) {
+async function calculateRates({ shop, province, city, country, weightKg, cartTotal, productIds }) {
   if (!shop) {
     return Response.json(
       { error: "Missing required parameter: shop" },
@@ -151,22 +114,29 @@ async function calculateRates({ shop, province, city, weightKg, cartTotal, produ
     );
   }
 
-  const departmentSlug = resolveProvinceSlug(province);
-  const departmentName = SLUG_TO_DEPARTMENT[departmentSlug] || province;
-  const cityResolution = resolveCity(city || "", departmentName);
+  // Shop metadata drives currency/timezone/country; the destination country
+  // defaults to the shop country when the storefront doesn't send one.
+  const shopMeta = await getShopMeta(shop);
+  const destCountry = country || shopMeta.country || "CO";
+  const shopCurrency = shopMeta.currency || "COP";
+
+  const departmentSlug = provinceToSlug(destCountry, province);
+  const departmentName = provinceDisplayName(destCountry, province);
+  const cityResolution = resolveCity(city || "", departmentName, destCountry);
   const resolvedCity = cityResolution.resolved;
 
-  debug(`[rate-calc] ${shop} | ${province} → ${departmentSlug} | city: "${city}" → "${resolvedCity}" | weight: ${weightKg}kg | total: $${cartTotal}`);
+  debug(`[rate-calc] ${shop} | ${destCountry} ${province} → ${departmentSlug} | city: "${city}" → "${resolvedCity}" | weight: ${weightKg}kg | total: ${cartTotal} ${shopCurrency}`);
 
   const itemTags = productIds ? await fetchProductTags(shop, productIds) : null;
 
   // Merge por serviceCode: zona autoritativa para códigos que define,
   // _default llena huecos para códigos no definidos (o todo si no hay zona).
+  const rateOpts = { country: destCountry, timezone: shopMeta.ianaTimezone, threshold: shopMeta.cityMatchThreshold };
   const zoneDefinedCodes = await getZoneDefinedServiceCodes(shop, departmentSlug);
   const zoneRates = zoneDefinedCodes.size
-    ? await getRatesForDestination(shop, departmentSlug, resolvedCity, departmentName, itemTags)
+    ? await getRatesForDestination(shop, departmentSlug, resolvedCity, departmentName, itemTags, rateOpts)
     : [];
-  const defaultRates = await getRatesForDestination(shop, "_default", "", null, itemTags);
+  const defaultRates = await getRatesForDestination(shop, "_default", "", null, itemTags, rateOpts);
   const defaultFillIn = defaultRates.filter((r) => !zoneDefinedCodes.has(r.serviceCode));
   const rates = [...zoneRates, ...defaultFillIn];
 
@@ -179,8 +149,8 @@ async function calculateRates({ shop, province, city, weightKg, cartTotal, produ
         name: rate.name,
         service_code: rate.serviceCode,
         price,
-        price_formatted: price > 0 ? `$${price.toLocaleString("es-CO")}` : "Gratis",
-        currency: "COP",
+        price_formatted: price > 0 ? formatMoney(price, shopCurrency, undefined) : "Gratis",
+        currency: shopCurrency,
         description: rate.description || "",
       };
     }
@@ -234,6 +204,7 @@ export const loader = async ({ request }) => {
     shop: url.searchParams.get("shop"),
     province: url.searchParams.get("province"),
     city: url.searchParams.get("city") || "",
+    country: url.searchParams.get("country") || null,
     weightKg: url.searchParams.get("weight_kg") ? parseFloat(url.searchParams.get("weight_kg")) : null,
     cartTotal: url.searchParams.get("cart_total") ? parseFloat(url.searchParams.get("cart_total")) : null,
     productIds: productIdsRaw ? productIdsRaw.split(",").filter(Boolean) : null,
@@ -269,6 +240,7 @@ export const action = async ({ request }) => {
       shop: body.shop,
       province: body.province,
       city: body.city || "",
+      country: body.country || null,
       weightKg: body.weight_kg ? parseFloat(body.weight_kg) : null,
       cartTotal: body.cart_total ? parseFloat(body.cart_total) : null,
       productIds: body.product_ids || null,

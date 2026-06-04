@@ -7,12 +7,12 @@
  */
 
 import prisma from "./db.server";
-import { resolveCity, normalizeCityForRules } from "./utils/city-resolver.server";
+import { resolveCity, normalizeCityForRules, cityMatchesList } from "./utils/city-resolver.server";
 import { debug, warn, info, error as logError } from "./utils/logger.server";
 
 export { resolveCity };
 
-const COLOMBIA_TZ = "America/Bogota";
+const DEFAULT_TZ = "America/Bogota";
 
 const DAY_NAMES = ["sun", "mon", "tue", "wed", "thu", "fri", "sat"];
 
@@ -44,17 +44,24 @@ export function normalizeCity(city) {
 // --- Schedule helpers ---
 
 /**
- * Obtiene la hora y día actual en Colombia (UTC-5).
+ * Obtiene la hora y día actual en el timezone de la tienda.
  * Retorna { hour: 14, minute: 30, day: "mon" }
+ * @param {string} [tz] — IANA timezone (ej "America/New_York"). Default Bogotá.
  */
-function getNowColombia() {
+function getNowInTz(tz) {
   const now = new Date();
-  const colombiaStr = now.toLocaleString("en-US", { timeZone: COLOMBIA_TZ });
-  const colombiaDate = new Date(colombiaStr);
+  let localStr;
+  try {
+    localStr = now.toLocaleString("en-US", { timeZone: tz || DEFAULT_TZ });
+  } catch {
+    // IANA tz inválido → caer al default para no romper el cálculo de horario.
+    localStr = now.toLocaleString("en-US", { timeZone: DEFAULT_TZ });
+  }
+  const localDate = new Date(localStr);
   return {
-    hour: colombiaDate.getHours(),
-    minute: colombiaDate.getMinutes(),
-    day: DAY_NAMES[colombiaDate.getDay()],
+    hour: localDate.getHours(),
+    minute: localDate.getMinutes(),
+    day: DAY_NAMES[localDate.getDay()],
   };
 }
 
@@ -63,13 +70,14 @@ function getNowColombia() {
  * - Si no tiene timeFrom/timeTo → siempre disponible
  * - Si tiene daysOfWeek y hoy no está → no disponible
  * - Si la hora actual está fuera del rango → no disponible
+ * @param {string} [tz] — timezone de la tienda para evaluar el horario.
  */
-function isWithinSchedule(rate) {
+function isWithinSchedule(rate, tz) {
   const { timeFrom, timeTo, daysOfWeek } = rate;
 
   if (!timeFrom && !timeTo) return true;
 
-  const now = getNowColombia();
+  const now = getNowInTz(tz);
 
   const days = JSON.parse(daysOfWeek || "[]");
   if (days.length > 0 && !days.includes(now.day)) {
@@ -128,8 +136,18 @@ export async function getZonesWithRates(shop) {
  *
  * @param {string[]} [itemTags] - Tags de los productos en el carrito (todos combinados, sin duplicados).
  *                                 Si no se pasa, se ignora la restricción por tags.
+ * @param {{ country?: string, timezone?: string }} [opts] - País del destino
+ *        (gatea el catálogo de ciudades CO) y timezone de la tienda (evalúa
+ *        horarios). Defaults: CO / America/Bogota.
  */
-export async function getRatesForDestination(shop, departmentSlug, city, department, itemTags) {
+export async function getRatesForDestination(shop, departmentSlug, city, department, itemTags, opts = {}) {
+  const country = opts.country || "CO";
+  const timezone = opts.timezone || DEFAULT_TZ;
+  // Fuzzy threshold 0..1 (default exact). opts.threshold may arrive as a 0-100
+  // percentage from the shop setting, so normalize > 1 down to a ratio.
+  const rawThreshold = typeof opts.threshold === "number" ? opts.threshold : 1;
+  const threshold = rawThreshold > 1 ? rawThreshold / 100 : rawThreshold;
+
   const zone = await prisma.shippingZone.findUnique({
     where: { shop_slug: { shop, slug: departmentSlug } },
     include: { rates: { where: { enabled: true } } },
@@ -138,8 +156,8 @@ export async function getRatesForDestination(shop, departmentSlug, city, departm
   if (!zone || !zone.enabled) return [];
 
   const deptName = department || zone.department;
-  const resolved = resolveCity(city, deptName);
-  const normalizedCity = normalizeCityForRules(city, deptName);
+  const resolved = resolveCity(city, deptName, country);
+  const normalizedCity = normalizeCityForRules(city, deptName, country);
 
   if (resolved.method !== "exact" && resolved.method !== "none") {
     debug(`[city-resolver] "${city}" → "${resolved.resolved}" (${resolved.method}${resolved.distance ? `, dist=${resolved.distance}` : ""})`);
@@ -173,13 +191,24 @@ export async function getRatesForDestination(shop, departmentSlug, city, departm
     }
 
     if (rate.cityCondition !== "all") {
-      const cities = JSON.parse(rate.cities || "[]").map((c) => normalizeCityForRules(c, deptName));
-      if (rate.cityCondition === "include" && !cities.includes(normalizedCity)) {
-        info(`[rates-filter] ${zone.slug}/${rate.name}(${rate.serviceCode}) DROP city include: input="${normalizedCity}" not in [${cities.join(",")}] (raw=${rate.cities})`);
+      const cities = JSON.parse(rate.cities || "[]");
+      let aliasMap = {};
+      try {
+        aliasMap = JSON.parse(rate.cityAliases || "{}") || {};
+      } catch {
+        // Bad alias JSON — ignore aliases, still match on cities + fuzzy.
+      }
+      // Fuzzy + alias homologation against the merchant's own city list.
+      // `normalizedCity` is the resolved customer city (CO catalog canonicalizes
+      // it; other countries pass it through stripped). cityMatchesList strips
+      // candidates internally, so pass the raw configured cities.
+      const matches = cityMatchesList(normalizedCity, cities, aliasMap, threshold);
+      if (rate.cityCondition === "include" && !matches) {
+        info(`[rates-filter] ${zone.slug}/${rate.name}(${rate.serviceCode}) DROP city include: input="${normalizedCity}" no match in [${cities.join(",")}] @${threshold} (raw=${rate.cities})`);
         return false;
       }
-      if (rate.cityCondition === "exclude" && cities.includes(normalizedCity)) {
-        info(`[rates-filter] ${zone.slug}/${rate.name}(${rate.serviceCode}) DROP city exclude: input="${normalizedCity}" in [${cities.join(",")}]`);
+      if (rate.cityCondition === "exclude" && matches) {
+        info(`[rates-filter] ${zone.slug}/${rate.name}(${rate.serviceCode}) DROP city exclude: input="${normalizedCity}" matched [${cities.join(",")}] @${threshold}`);
         return false;
       }
     }
@@ -197,7 +226,7 @@ export async function getRatesForDestination(shop, departmentSlug, city, departm
       }
     }
 
-    if (!isWithinSchedule(rate)) {
+    if (!isWithinSchedule(rate, timezone)) {
       info(`[rates-filter] ${zone.slug}/${rate.name}(${rate.serviceCode}) DROP schedule`);
       return false;
     }
@@ -244,7 +273,7 @@ export async function getZoneDefinedServiceCodes(shop, departmentSlug) {
   );
 }
 
-export async function getOrCreateDefaultZone(shop) {
+export async function getOrCreateDefaultZone(shop, country = "CO") {
   let zone = await prisma.shippingZone.findUnique({
     where: { shop_slug: { shop, slug: DEFAULT_ZONE_SLUG } },
     include: { rates: { orderBy: { createdAt: "asc" } } },
@@ -252,7 +281,7 @@ export async function getOrCreateDefaultZone(shop) {
 
   if (!zone) {
     zone = await prisma.shippingZone.create({
-      data: { shop, department: DEFAULT_ZONE_NAME, slug: DEFAULT_ZONE_SLUG },
+      data: { shop, department: DEFAULT_ZONE_NAME, slug: DEFAULT_ZONE_SLUG, country },
       include: { rates: true },
     });
   }
@@ -260,9 +289,16 @@ export async function getOrCreateDefaultZone(shop) {
   return zone;
 }
 
-export async function createZone(shop, department, enabledServices) {
+/**
+ * Crea una zona. `department` debe ser el NOMBRE de la subdivisión (ej
+ * "Antioquia", "California"); el slug se deriva de él y debe coincidir con
+ * `provinceToSlug(country, código)` que usa el carrier service en checkout.
+ * `country` es metadata (gatea catálogo de ciudades + selector de UI), no
+ * forma parte de la llave de búsqueda — el slug sigue siendo único por tienda.
+ */
+export async function createZone(shop, department, enabledServices, country = "CO") {
   const slug = toSlug(department);
-  const data = { shop, department, slug };
+  const data = { shop, department, slug, country };
   if (Array.isArray(enabledServices) && enabledServices.length > 0) {
     data.enabledServices = JSON.stringify(enabledServices);
   }
@@ -297,6 +333,7 @@ export async function saveRate({
   description,
   cityCondition,
   cities,
+  cityAliases,
   timeFrom,
   timeTo,
   daysOfWeek,
@@ -306,7 +343,9 @@ export async function saveRate({
   productCondition,
   productTags,
 }) {
-  const parsedPrice = parseInt(price, 10);
+  // parseFloat (not parseInt): prices are in major currency units and may have
+  // minor units for non-zero-decimal currencies (USD 12.99).
+  const parsedPrice = parseFloat(price);
 
   const fields = {
     name,
@@ -315,6 +354,7 @@ export async function saveRate({
     description: description || "",
     cityCondition: cityCondition || "all",
     cities: cities || "[]",
+    cityAliases: cityAliases || "{}",
     timeFrom: timeFrom || null,
     timeTo: timeTo || null,
     daysOfWeek: daysOfWeek || "[]",

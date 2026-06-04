@@ -178,13 +178,24 @@ function fuzzyFind(input, catalog, maxDistance) {
 /**
  * Resuelve un nombre de ciudad a su forma canónica.
  *
+ * El catálogo (alias + fuzzy contra municipios) es exclusivo de Colombia. Para
+ * cualquier otro país el fuzzy matching contra municipios colombianos
+ * produciría resoluciones erróneas (ej. "Austin" → algún municipio CO dentro
+ * del umbral de edición), así que se omite: solo se normaliza el texto.
+ *
  * @param {string} rawCity  — lo que escribió el cliente ("medallo", "Medellin", etc.)
  * @param {string} [department] — nombre del departamento (mejora precisión de fuzzy)
+ * @param {string} [country="CO"] — ISO 3166-1 alpha-2 del destino. Solo "CO" usa el catálogo.
  * @returns {{ resolved: string, method: "exact"|"alias"|"fuzzy"|"none", distance?: number }}
  */
-export function resolveCity(rawCity, department) {
+export function resolveCity(rawCity, department, country = "CO") {
   if (!rawCity || !rawCity.trim()) {
     return { resolved: "", method: "none" };
+  }
+
+  // Países no-CO: normalizar y devolver sin tocar el catálogo colombiano.
+  if (country && country !== "CO") {
+    return { resolved: rawCity.toUpperCase().trim(), method: "none" };
   }
 
   const input = strip(rawCity);
@@ -229,9 +240,53 @@ export function resolveCity(rawCity, department) {
 
 /**
  * Normaliza la ciudad para comparación en reglas de envío.
- * Reemplaza normalizeCity() — ahora con resolución inteligente.
+ * Reemplaza normalizeCity() — ahora con resolución inteligente (solo CO).
  */
-export function normalizeCityForRules(city, department) {
-  const { resolved } = resolveCity(city, department);
+export function normalizeCityForRules(city, department, country = "CO") {
+  const { resolved } = resolveCity(city, department, country);
   return strip(resolved);
+}
+
+// ─── Fuzzy homologación definida por el merchant ─────────────────────
+// El merchant define las ciudades (y opcionalmente apodos/variantes) por
+// tarifa; en checkout se homologa lo que escribe el comprador con un umbral
+// de similaridad. Agnóstico de país — no depende del catálogo colombiano.
+
+/**
+ * Similaridad 0..1 entre dos strings tras normalizar (Levenshtein ratio).
+ * 1 = idénticos; 0 = sin parecido.
+ */
+export function cityMatchScore(input, candidate) {
+  const a = strip(input);
+  const b = strip(candidate);
+  if (!a || !b) return 0;
+  if (a === b) return 1;
+  const dist = levenshtein(a, b);
+  const maxLen = Math.max(a.length, b.length);
+  return maxLen === 0 ? 0 : 1 - dist / maxLen;
+}
+
+/**
+ * ¿`input` (ciudad del comprador) homologa a alguna ciudad configurada o a
+ * uno de sus alias, dentro del umbral?
+ *
+ * @param {string} input — ciudad del comprador (ya normalizada o cruda; se normaliza acá)
+ * @param {string[]} cities — ciudades canónicas configuradas en la tarifa
+ * @param {Record<string,string[]>} [aliasMap] — { ciudadCanónica: [alias, ...] }
+ * @param {number} [threshold=1] — umbral 0..1. 1 = match exacto (comportamiento legacy).
+ * @returns {boolean}
+ */
+export function cityMatchesList(input, cities, aliasMap = {}, threshold = 1) {
+  if (!Array.isArray(cities) || cities.length === 0) return false;
+  const t = typeof threshold === "number" && threshold > 0 && threshold <= 1 ? threshold : 1;
+
+  for (const city of cities) {
+    if (cityMatchScore(input, city) >= t) return true;
+    // Alias indexados por la ciudad tal cual o por su forma normalizada.
+    const aliases = aliasMap[city] || aliasMap[strip(city)] || [];
+    for (const alias of aliases) {
+      if (cityMatchScore(input, alias) >= t) return true;
+    }
+  }
+  return false;
 }

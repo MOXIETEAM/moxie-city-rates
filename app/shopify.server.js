@@ -7,7 +7,7 @@ import {
 } from "@shopify/shopify-app-react-router/server";
 import { PrismaSessionStorage } from "@shopify/shopify-app-session-storage-prisma";
 import prisma from "./db.server";
-import { ensureShopRecord } from "./utils/shop-record.server";
+import { ensureShopRecord, captureShopMeta } from "./utils/shop-record.server";
 import { ensureFletixCarrierService } from "./utils/carrier-service.server";
 import { syncRulesToMetafield } from "./mox-shipping-rules.server";
 import { warn } from "./utils/logger.server";
@@ -52,6 +52,9 @@ const shopify = shopifyApp({
       } catch (e) {
         warn("[afterAuth] ensureShopRecord:", e?.message || e);
       }
+      // Capture shop currency / timezone / country so the app stops assuming
+      // Colombia. Runs after ensureShopRecord (row exists) and never throws.
+      await captureShopMeta(admin, session.shop);
       // Best-effort carrier registration so merchant doesn't need to click a button
       // post-install. Helper never throws — install must succeed even if Shopify
       // rejects the carrier (e.g. shop on plan without third-party carriers).

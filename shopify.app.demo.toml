@@ -1,0 +1,47 @@
+# City Rates — Demo app config.
+#
+# Purpose: temporary install on a dev store to record screenshots and the demo
+# video for App Store submission media. Not for production traffic. Pricing
+# uses the legacy Billing API (isTest auto-applies on dev stores), so no
+# Managed Pricing setup is required for the screenshots.
+#
+# Deploy: shopify app deploy --config=demo
+# Dev:    shopify app dev --config=demo
+
+client_id = "7d47f8bd8a68b36ee61a6b7e54e3a4c4"
+name = "City Rates Demo"
+handle = "city-rates-demo"
+application_url = "https://moxie-city-rates-custom-app.onrender.com"
+embedded = true
+
+[build]
+automatically_update_urls_on_dev = true
+
+[webhooks]
+api_version = "2026-04"
+
+  [[webhooks.subscriptions]]
+  uri = "/webhooks/compliance"
+  compliance_topics = [ "customers/data_request", "customers/redact", "shop/redact" ]
+
+  [[webhooks.subscriptions]]
+  topics = [ "app/scopes_update" ]
+  uri = "/webhooks/app/scopes_update"
+
+  [[webhooks.subscriptions]]
+  topics = [ "app/uninstalled" ]
+  uri = "/webhooks/app/uninstalled"
+
+[access_scopes]
+scopes = "read_shipping,write_shipping,read_locations,read_products"
+
+[auth]
+redirect_urls = [ "https://moxie-city-rates-custom-app.onrender.com/api/auth" ]
+
+[app_proxy]
+url = "https://moxie-city-rates-custom-app.onrender.com"
+subpath = "cityrates"
+prefix = "apps"
+
+[app_preferences]
+url = "https://moxie-city-rates-custom-app.onrender.com/app"
