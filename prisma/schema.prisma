@@ -78,6 +78,36 @@ model ShippingZone {
   @@unique([shop, slug])
 }
 
+/// Quote log: una fila por request de tarifas (checkout real o simulador del
+/// admin). Es la herramienta de diagnóstico del merchant: guarda el destino,
+/// el carrito, qué reglas se evaluaron y por qué se descartaron, y qué rates
+/// se devolvieron. Escrito fire-and-forget desde el carrier service para no
+/// agregar latencia al checkout. Retención: ver QUOTE_RETENTION_DAYS en
+/// quote-log.server.js (limpieza oportunista en cada escritura muestreada).
+model RateQuote {
+  id             String   @id @default(cuid())
+  shop           String
+  source         String   @default("checkout") // "checkout" | "simulator"
+  country        String   @default("")
+  province       String   @default("") // código/nombre crudo que envió Shopify
+  city           String   @default("") // ciudad cruda digitada por el cliente
+  resolvedCity   String   @default("") // ciudad homologada por el resolver
+  resolveMethod  String   @default("") // "exact" | "alias" | "fuzzy" | "none"
+  departmentSlug String   @default("")
+  itemCount      Int      @default(0)
+  cartWeightKg   Float    @default(0)
+  cartTotal      Float    @default(0)
+  currency       String   @default("")
+  items          String   @default("[]") // JSON: snapshot reducido de items del carrito
+  decisions      String   @default("[]") // JSON: [{rateId,name,serviceCode,zone,matched,reason,price}]
+  steps          String   @default("[]") // JSON: pasos globales (resolución ciudad, zona, selección)
+  ratesReturned  String   @default("[]") // JSON: rates devueltas a Shopify
+  rateCount      Int      @default(0)
+  createdAt      DateTime @default(now())
+
+  @@index([shop, createdAt])
+}
+
 model ShippingRate {
   id            String       @id @default(cuid())
   zoneId        String

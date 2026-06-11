@@ -3,27 +3,29 @@
  *
  * Maneja TODOS los métodos de envío (express, envío estándar, pickup).
  *
- * Lógica:
+ * Lógica (implementada en app/rate-engine.server.js, compartida con el
+ * simulador del admin):
  * - Items con _mox_service_code pre-seleccionado → retorna solo esa tarifa
  * - Carrito mixto → retorna tarifa combinada (suma precios, pickup no suma)
  * - Sin pre-selección → retorna todas las tarifas aplicables al destino
  * - Sin zona configurada → aplica tarifa por defecto (_default)
  *
+ * Cada request se persiste al quote log (fire-and-forget, nunca bloquea ni
+ * demora la respuesta a Shopify) para diagnóstico del merchant en /app/quotes.
+ *
  * Este endpoint es público (no usa authenticate.admin).
  * El shop se identifica via query param ?shop= incluido al registrar el carrier service.
  */
 
-import { getRatesForDestination, resolveCity, getZoneDefinedServiceCodes } from "../mox-shipping-rules.server";
+import { quoteShipping } from "../rate-engine.server";
 import { debug, info, error as logError } from "../utils/logger.server";
 import { unauthenticated } from "../shopify.server";
 import prisma from "../db.server";
 import { verifyCarrierServiceCallbackHmac } from "../utils/shopify-hmac.server";
 import { consume, getClientIp } from "../utils/rate-limit.server";
-import { provinceToSlug, provinceDisplayName, toCarrierTotalPrice } from "../utils/geo";
+import { toCarrierTotalPrice } from "../utils/geo";
 import { getShopMeta } from "../utils/shop-record.server";
-
-
-const CARRIER_SERVICE_CODES = new Set(["mox_express", "mox_envio", "mox_pickup"]);
+import { createQuoteTrace, saveQuote } from "../utils/quote-log.server";
 
 /**
  * Verifica si hay rates con condiciones de producto activas para esta tienda.
@@ -74,211 +76,6 @@ async function fetchCartProductTags(shop, items) {
     debug(`[carrier-service] Error fetching product tags: ${err.message}`);
     return [];
   }
-}
-
-/**
- * Normaliza un nombre de depto para comparación (uppercase, sin tildes, sin sufijo D.C.).
- */
-function normalizeDeptName(name) {
-  if (!name) return "";
-  return String(name)
-    .toUpperCase()
-    .trim()
-    .normalize("NFD")
-    .replace(/[\u0300-\u036f]/g, "")
-    .replace(/\s*D\.?C\.?\s*$/i, "")
-    .replace(/\s+/g, " ")
-    .trim();
-}
-
-/**
- * Detecta si el carrito tiene items de pickup cuya `_mox_department` (depto
- * donde está la sucursal elegida) no matchea el depto del destino del
- * checkout. Devuelve el depto del carrito cuando hay mismatch, o null.
- * Usado para bloquear pedidos tipo "pickup Medellín + envío a Bogotá".
- */
-function detectPickupDeptMismatch(items, destDeptName) {
-  const destNorm = normalizeDeptName(destDeptName);
-  for (const item of items) {
-    const props = item.properties || {};
-    if (props["_mox_service_code"] !== "mox_pickup") continue;
-    const cartDept = props["_mox_department"];
-    if (!cartDept) continue;
-    if (normalizeDeptName(cartDept) !== destNorm) return cartDept;
-  }
-  return null;
-}
-
-/**
- * Analiza los service codes de los items del carrito.
- * Retorna:
- *   { type: "single", code: "mox_express" }
- *   { type: "mixed", codes: ["mox_express", "mox_pickup"] }
- *   { type: "none" }
- */
-function analyzeCartMethods(items) {
-  const codeCount = {};
-
-  for (let i = 0; i < items.length; i++) {
-    const props = items[i].properties || {};
-    const code = props["_mox_service_code"];
-    if (code && CARRIER_SERVICE_CODES.has(code)) {
-      codeCount[code] = (codeCount[code] || 0) + items[i].quantity;
-    }
-  }
-
-  const codes = Object.keys(codeCount);
-  if (codes.length === 0) return { type: "none" };
-  if (codes.length === 1) return { type: "single", code: codes[0] };
-  return { type: "mixed", codes, codeCount };
-}
-
-/**
- * Calcula el peso total del carrito en kg.
- */
-function calculateCartWeightKg(items) {
-  let totalGrams = 0;
-  for (const item of items) {
-    totalGrams += (item.grams || 0) * (item.quantity || 1);
-  }
-  return totalGrams / 1000;
-}
-
-/**
- * Calcula el precio total de los items del carrito en la moneda de la tienda.
- * Shopify envía `price` en centavos por cada item.
- */
-function calculateCartTotal(items) {
-  let totalSubunits = 0;
-  for (const item of items) {
-    totalSubunits += (Number(item.price) || 0) * (item.quantity || 1);
-  }
-  return totalSubunits / 100;
-}
-
-/**
- * Resuelve el precio de una tarifa considerando su modo de pricing.
- */
-function resolveRatePrice(rate, cartWeightKg, cartTotal) {
-  if (rate.pricingMode === "weight_tiers") {
-    const tiers = JSON.parse(rate.weightTiers || "[]");
-    if (!tiers.length) return rate.price;
-
-    for (const tier of tiers) {
-      if (cartWeightKg >= tier.minKg && cartWeightKg < tier.maxKg) {
-        return tier.price;
-      }
-    }
-
-    const lastTier = tiers[tiers.length - 1];
-    if (cartWeightKg >= lastTier.minKg) return lastTier.price;
-    return null;
-  }
-
-  if (rate.pricingMode === "cart_total") {
-    const tiers = JSON.parse(rate.cartTotalTiers || "[]");
-    if (!tiers.length) return rate.price;
-
-    for (const tier of tiers) {
-      const hasNoLimit = !tier.maxAmount || tier.maxAmount === 0;
-      if (cartTotal >= tier.minAmount && (hasNoLimit || cartTotal < tier.maxAmount)) {
-        return tier.price;
-      }
-    }
-
-    const lastTier = tiers[tiers.length - 1];
-    if (cartTotal >= lastTier.minAmount) return lastTier.price;
-    return null;
-  }
-
-  return rate.price;
-}
-
-/**
- * De un array de rates con el mismo serviceCode, retorna la de menor precio.
- */
-function pickBestRate(rates, cartWeightKg, cartTotal) {
-  let best = null;
-  for (const rate of rates) {
-    const price = resolveRatePrice(rate, cartWeightKg, cartTotal);
-    if (price === null) continue;
-    if (best === null || price < best.price) {
-      best = { rate, price };
-    }
-  }
-  return best;
-}
-
-/**
- * De un array de rates (posiblemente con serviceCodes repetidos),
- * retorna la mejor tarifa por serviceCode.
- */
-function deduplicateBestRates(rates, cartWeightKg, cartTotal) {
-  const byCode = {};
-  for (const rate of rates) {
-    if (!byCode[rate.serviceCode]) byCode[rate.serviceCode] = [];
-    byCode[rate.serviceCode].push(rate);
-  }
-
-  const result = [];
-  for (const code in byCode) {
-    const best = pickBestRate(byCode[code], cartWeightKg, cartTotal);
-    if (best) result.push(best);
-  }
-  return result;
-}
-
-/**
- * Calcula una tarifa combinada cuando hay mezcla de métodos en el carrito.
- * Items de pickup (mox_pickup) no suman al precio de envío.
- */
-function buildCombinedRate(items, allRates, cartWeightKg, cartTotal) {
-  const codeToRates = {};
-  for (const rate of allRates) {
-    if (!codeToRates[rate.serviceCode]) codeToRates[rate.serviceCode] = [];
-    codeToRates[rate.serviceCode].push(rate);
-  }
-
-  let totalPrice = 0;
-  const methodNames = [];
-  const seenCodes = new Set();
-
-  for (let i = 0; i < items.length; i++) {
-    const props = items[i].properties || {};
-    const code = props["_mox_service_code"];
-    if (!code || seenCodes.has(code)) continue;
-    seenCodes.add(code);
-
-    // Si cualquier item del carrito requiere un método que no existe para el
-    // destino, la tarifa combinada es inválida: no podemos cumplir ese item.
-    // Retornar null → Shopify muestra "No hay métodos de envío" y el checkout
-    // queda bloqueado hasta que cambien la dirección o eliminen el item.
-    const candidates = codeToRates[code];
-    if (!candidates || !candidates.length) {
-      debug(`[carrier-service] Combined rate inválida: carrito requiere "${code}" pero el destino no tiene rates para ese método`);
-      return null;
-    }
-
-    const best = pickBestRate(candidates, cartWeightKg, cartTotal);
-    if (!best) {
-      debug(`[carrier-service] Combined rate inválida: "${code}" sin best rate (pickBestRate retornó null)`);
-      return null;
-    }
-
-    if (code !== "mox_pickup") {
-      totalPrice += best.price;
-    }
-    methodNames.push(best.rate.name);
-  }
-
-  if (methodNames.length === 0) return null;
-
-  return {
-    name: methodNames.join(" + "),
-    serviceCode: "mox_combined",
-    price: totalPrice,
-    description: "Envío combinado según métodos seleccionados",
-  };
 }
 
 export const action = async ({ request }) => {
@@ -342,29 +139,7 @@ export const action = async ({ request }) => {
     // resolution. Defaults to the shop country when Shopify omits it.
     const destCountry = country || shopMeta.country || "CO";
 
-    const departmentSlug = provinceToSlug(destCountry, province);
-    const departmentName = provinceDisplayName(destCountry, province);
-
-    const cityResolution = resolveCity(city || "", departmentName, destCountry);
-    const resolvedCity = cityResolution.resolved;
-
-    info(`[carrier-service] ${shop} | ${destCountry} province="${province}" (${departmentSlug}) | city="${city || ""}" → resolved="${resolvedCity}" (${cityResolution.method}${cityResolution.distance ? `, dist=${cityResolution.distance}` : ""})`);
-
     const items = body?.rate?.items || [];
-    const cartWeightKg = calculateCartWeightKg(items);
-    // Cart total stays in the shop currency — cart_total tier thresholds are
-    // configured by the merchant in their own currency, so no conversion.
-    const cartTotal = calculateCartTotal(items);
-
-    const cartMethods = analyzeCartMethods(items);
-
-    // Corta-circuito: pickup con `_mox_department` distinto al destino → no cumplible.
-    // Shopify cobrará una "combined rate" que silencia el pickup si no bloqueamos acá.
-    const pickupMismatchDept = detectPickupDeptMismatch(items, departmentName);
-    if (pickupMismatchDept) {
-      debug(`[carrier-service] Pickup dept mismatch: carrito tiene pickup en "${pickupMismatchDept}" pero destino es "${departmentName}" → 0 rates`);
-      return Response.json({ rates: [] });
-    }
 
     for (const item of items) {
       const props = item.properties || {};
@@ -372,50 +147,41 @@ export const action = async ({ request }) => {
       debug(`[carrier-service]   item: ${item.name || item.title || "?"} | _mox_service_code=${code} | price=${item.price} ${shopCurrency}`);
     }
 
-    debug(`[carrier-service] Cart: ${items.length} items, ${cartWeightKg.toFixed(2)} kg, ${cartTotal.toLocaleString()} ${shopCurrency}, methods: ${cartMethods.type}`, cartMethods.type !== "none" ? JSON.stringify(cartMethods) : "");
-
     let itemTags = null;
     const hasProductRates = await shopHasProductRates(shop);
     if (hasProductRates) {
       itemTags = await fetchCartProductTags(shop, items);
     }
 
-    // Fletix como única fuente de verdad, con merge por serviceCode:
-    //   - Si la zona del depto define un serviceCode → solo sus rules aplican para ese código.
-    //   - Si la zona NO define un serviceCode → _default lo cubre (fill-in por código).
-    //   - Si no hay zona para el depto → todo viene de _default.
-    const zoneDefinedCodes = await getZoneDefinedServiceCodes(shop, departmentSlug);
-    const rateOpts = { country: destCountry, timezone: shopMeta.ianaTimezone, threshold: shopMeta.cityMatchThreshold };
-    const zoneRates = zoneDefinedCodes.size
-      ? await getRatesForDestination(shop, departmentSlug, resolvedCity, departmentName, itemTags, rateOpts)
-      : [];
-    const defaultRates = await getRatesForDestination(shop, "_default", "", null, itemTags, rateOpts);
-    const defaultFillIn = defaultRates.filter((r) => !zoneDefinedCodes.has(r.serviceCode));
-    const matchingRates = [...zoneRates, ...defaultFillIn];
+    const trace = createQuoteTrace();
+    const result = await quoteShipping({
+      shop,
+      destCountry,
+      province,
+      city: city || "",
+      items,
+      shopMeta,
+      itemTags,
+      trace,
+    });
 
-    info(`[carrier-service] ${departmentSlug}/${resolvedCity} | zoneDefines=[${[...zoneDefinedCodes].join(",") || "none"}] | zoneRates=${zoneRates.length} defaultRates=${defaultRates.length} matching=${matchingRates.length} | rates: ${matchingRates.map(r => `${r.serviceCode}=$${r.price}(${r.pricingMode})`).join(", ") || "(ninguna)"}`);
+    const {
+      finalRates,
+      departmentSlug,
+      departmentName,
+      cityResolution,
+      resolvedCity,
+      cartWeightKg,
+      cartTotal,
+      cartMethods,
+      pickupMismatchDept,
+    } = result;
 
-    if (!matchingRates.length) {
-      debug(`[carrier-service] Sin rates para ${departmentSlug}/${resolvedCity}`);
-      return Response.json({ rates: [] });
-    }
+    info(`[carrier-service] ${shop} | ${destCountry} province="${province}" (${departmentSlug}) | city="${city || ""}" → resolved="${resolvedCity}" (${cityResolution.method}${cityResolution.distance ? `, dist=${cityResolution.distance}` : ""})`);
+    debug(`[carrier-service] Cart: ${items.length} items, ${cartWeightKg.toFixed(2)} kg, ${cartTotal.toLocaleString()} ${shopCurrency}, methods: ${cartMethods.type}`, cartMethods.type !== "none" ? JSON.stringify(cartMethods) : "");
 
-    let finalRates;
-
-    if (cartMethods.type === "single") {
-      const candidates = matchingRates.filter((r) => r.serviceCode === cartMethods.code);
-      const best = pickBestRate(candidates, cartWeightKg, cartTotal);
-      finalRates = best ? [best] : [];
-      debug(`[carrier-service] Single method "${cartMethods.code}" → ${finalRates.length ? `$${best.price}` : "none"} (${candidates.length} candidate(s))`);
-
-    } else if (cartMethods.type === "mixed") {
-      const combined = buildCombinedRate(items, matchingRates, cartWeightKg, cartTotal);
-      finalRates = combined ? [combined] : [];
-      debug(`[carrier-service] Mixed methods ${cartMethods.codes.join("+")} → ${finalRates.length ? `$${combined.price}` : "none"}`);
-
-    } else {
-      finalRates = deduplicateBestRates(matchingRates, cartWeightKg, cartTotal);
-      debug(`[carrier-service] Sin preselección → ${finalRates.length} rate(s)`);
+    if (pickupMismatchDept) {
+      debug(`[carrier-service] Pickup dept mismatch: carrito tiene pickup en "${pickupMismatchDept}" pero destino es "${departmentName}" → 0 rates`);
     }
 
     const rates = finalRates
@@ -441,6 +207,29 @@ export const action = async ({ request }) => {
 
     info(`[carrier-service] ${shop} | ${departmentSlug}/${city} → ${rates.length} rate(s)`);
     info(`[carrier-service] RESPONSE shopCurrency=${shopCurrency} payload=${JSON.stringify({ rates })}`);
+
+    // Quote log — fire-and-forget: no await, nunca afecta la respuesta a Shopify.
+    void saveQuote({
+      shop,
+      source: "checkout",
+      country: destCountry,
+      province: province || "",
+      city: city || "",
+      resolvedCity,
+      resolveMethod: cityResolution.method,
+      departmentSlug,
+      items,
+      cartWeightKg,
+      cartTotal,
+      currency: shopCurrency,
+      trace,
+      ratesReturned: rates.map((r) => ({
+        name: r.service_name,
+        serviceCode: r.service_code,
+        totalPrice: r.total_price,
+        currency: r.currency,
+      })),
+    });
 
     return Response.json({ rates });
   } catch (err) {

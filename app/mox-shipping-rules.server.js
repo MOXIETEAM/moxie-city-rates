@@ -136,13 +136,16 @@ export async function getZonesWithRates(shop) {
  *
  * @param {string[]} [itemTags] - Tags de los productos en el carrito (todos combinados, sin duplicados).
  *                                 Si no se pasa, se ignora la restricción por tags.
- * @param {{ country?: string, timezone?: string }} [opts] - País del destino
+ * @param {{ country?: string, timezone?: string, trace?: object }} [opts] - País del destino
  *        (gatea el catálogo de ciudades CO) y timezone de la tienda (evalúa
- *        horarios). Defaults: CO / America/Bogota.
+ *        horarios). Defaults: CO / America/Bogota. `trace` (opcional, de
+ *        createQuoteTrace()) acumula una decisión por regla evaluada para el
+ *        quote log — matched + razón de descarte.
  */
 export async function getRatesForDestination(shop, departmentSlug, city, department, itemTags, opts = {}) {
   const country = opts.country || "CO";
   const timezone = opts.timezone || DEFAULT_TZ;
+  const trace = opts.trace || null;
   // Fuzzy threshold 0..1 (default exact). opts.threshold may arrive as a 0-100
   // percentage from the shop setting, so normalize > 1 down to a ratio.
   const rawThreshold = typeof opts.threshold === "number" ? opts.threshold : 1;
@@ -153,7 +156,10 @@ export async function getRatesForDestination(shop, departmentSlug, city, departm
     include: { rates: { where: { enabled: true } } },
   });
 
-  if (!zone || !zone.enabled) return [];
+  if (!zone || !zone.enabled) {
+    trace?.steps.push({ step: "zone_lookup", slug: departmentSlug, found: !!zone, enabled: zone?.enabled ?? false });
+    return [];
+  }
 
   const deptName = department || zone.department;
   const resolved = resolveCity(city, deptName, country);
@@ -184,9 +190,26 @@ export async function getRatesForDestination(shop, departmentSlug, city, departm
     }
   }
 
+  // Una entrada de trace por regla evaluada. `reason` queda "ok" provisional
+  // para las que pasan — la fase de selección de precio (rate-engine) la
+  // sobreescribe con selected / lost_price / tier_gap / method_not_selected.
+  const traceRule = (rate, matched, reason, detail) => {
+    if (!trace) return;
+    trace.rules.push({
+      rateId: rate.id,
+      name: rate.name,
+      serviceCode: rate.serviceCode,
+      zone: zone.slug,
+      matched,
+      reason,
+      ...(detail ? { detail } : {}),
+    });
+  };
+
   return zone.rates.filter((rate) => {
     if (enabledServicesForZone && !enabledServicesForZone.has(rate.serviceCode)) {
       info(`[rates-filter] ${zone.slug}/${rate.name}(${rate.serviceCode}) DROP enabledServices=[${[...enabledServicesForZone].join(",")}]`);
+      traceRule(rate, false, "service_disabled");
       return false;
     }
 
@@ -205,10 +228,12 @@ export async function getRatesForDestination(shop, departmentSlug, city, departm
       const matches = cityMatchesList(normalizedCity, cities, aliasMap, threshold);
       if (rate.cityCondition === "include" && !matches) {
         info(`[rates-filter] ${zone.slug}/${rate.name}(${rate.serviceCode}) DROP city include: input="${normalizedCity}" no match in [${cities.join(",")}] @${threshold} (raw=${rate.cities})`);
+        traceRule(rate, false, "city_include", `"${normalizedCity}" no está en [${cities.join(", ")}]`);
         return false;
       }
       if (rate.cityCondition === "exclude" && matches) {
         info(`[rates-filter] ${zone.slug}/${rate.name}(${rate.serviceCode}) DROP city exclude: input="${normalizedCity}" matched [${cities.join(",")}] @${threshold}`);
+        traceRule(rate, false, "city_exclude", `"${normalizedCity}" está excluida`);
         return false;
       }
     }
@@ -218,19 +243,23 @@ export async function getRatesForDestination(shop, departmentSlug, city, departm
       const hasMatch = rateTags.some((rt) => normalizedItemTags.includes(rt));
       if (rate.productCondition === "include_tags" && !hasMatch) {
         info(`[rates-filter] ${zone.slug}/${rate.name}(${rate.serviceCode}) DROP product include`);
+        traceRule(rate, false, "product_include", `carrito sin tags [${rateTags.join(", ")}]`);
         return false;
       }
       if (rate.productCondition === "exclude_tags" && hasMatch) {
         info(`[rates-filter] ${zone.slug}/${rate.name}(${rate.serviceCode}) DROP product exclude`);
+        traceRule(rate, false, "product_exclude", `carrito tiene tag excluido de [${rateTags.join(", ")}]`);
         return false;
       }
     }
 
     if (!isWithinSchedule(rate, timezone)) {
       info(`[rates-filter] ${zone.slug}/${rate.name}(${rate.serviceCode}) DROP schedule`);
+      traceRule(rate, false, "schedule", `fuera de ${rate.timeFrom || "?"}-${rate.timeTo || "?"}`);
       return false;
     }
 
+    traceRule(rate, true, "ok");
     return true;
   });
 }
