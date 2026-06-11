@@ -187,6 +187,10 @@ export function buildCombinedRate(items, allRates, cartWeightKg, cartTotal) {
   let totalPrice = 0;
   const methodNames = [];
   const seenCodes = new Set();
+  // Estimado de la combinada: el rango más conservador entre los métodos de
+  // envío que la componen (pickup no aplica — el cliente recoge).
+  let minDeliveryDays = null;
+  let maxDeliveryDays = null;
 
   for (let i = 0; i < items.length; i++) {
     const props = items[i].properties || {};
@@ -212,6 +216,12 @@ export function buildCombinedRate(items, allRates, cartWeightKg, cartTotal) {
 
     if (code !== "mox_pickup") {
       totalPrice += best.price;
+      if (best.rate.minDeliveryDays != null) {
+        minDeliveryDays = Math.max(minDeliveryDays ?? 0, best.rate.minDeliveryDays);
+      }
+      if (best.rate.maxDeliveryDays != null) {
+        maxDeliveryDays = Math.max(maxDeliveryDays ?? 0, best.rate.maxDeliveryDays);
+      }
     }
     methodNames.push(best.rate.name);
   }
@@ -223,6 +233,8 @@ export function buildCombinedRate(items, allRates, cartWeightKg, cartTotal) {
     serviceCode: "mox_combined",
     price: totalPrice,
     description: "Envío combinado según métodos seleccionados",
+    minDeliveryDays,
+    maxDeliveryDays,
   };
 }
 

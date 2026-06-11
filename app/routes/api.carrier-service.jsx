@@ -78,6 +78,33 @@ async function fetchCartProductTags(shop, items) {
   }
 }
 
+/**
+ * Convierte "N días calendario desde hoy" al formato de fecha que espera el
+ * carrier API de Shopify: "YYYY-MM-DD HH:MM:SS +ZZZZ". Se usa mediodía UTC
+ * para que la fecha mostrada no se corra de día por el timezone del cliente.
+ */
+function deliveryDateFromDays(days) {
+  const d = new Date(Date.now() + days * 24 * 60 * 60 * 1000);
+  const pad = (n) => String(n).padStart(2, "0");
+  return `${d.getUTCFullYear()}-${pad(d.getUTCMonth() + 1)}-${pad(d.getUTCDate())} 12:00:00 +0000`;
+}
+
+/**
+ * Campos min/max_delivery_date para una rate, o {} si no tiene estimado.
+ * `source` es la ShippingRate (entry.rate) o la combined rate sintética.
+ */
+function deliveryDateFields(source) {
+  const min = source?.minDeliveryDays;
+  const max = source?.maxDeliveryDays;
+  if (min == null && max == null) return {};
+  const minDays = min ?? max;
+  const maxDays = max ?? min;
+  return {
+    min_delivery_date: deliveryDateFromDays(minDays),
+    max_delivery_date: deliveryDateFromDays(maxDays),
+  };
+}
+
 export const action = async ({ request }) => {
   try {
     const url = new URL(request.url);
@@ -193,6 +220,7 @@ export const action = async ({ request }) => {
             total_price: toCarrierTotalPrice(entry.price),
             currency: shopCurrency,
             description: entry.rate.description || "",
+            ...deliveryDateFields(entry.rate),
           };
         }
         return {
@@ -201,6 +229,7 @@ export const action = async ({ request }) => {
           total_price: toCarrierTotalPrice(entry.price),
           currency: shopCurrency,
           description: entry.description || "",
+          ...deliveryDateFields(entry),
         };
       })
       .filter(Boolean);

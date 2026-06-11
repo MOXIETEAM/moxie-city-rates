@@ -133,6 +133,11 @@ model ShippingRate {
   daysOfWeek    String       @default("[]") // JSON array: '["mon","tue","wed","thu","fri"]', [] = todos
   productCondition String     @default("all")   // "all" | "include_tags" | "exclude_tags"
   productTags      String     @default("[]")    // JSON array: '["fragil","pesado"]'
+  // Estimado de entrega en días calendario. Si ambos son null no se envía
+  // estimado. En checkout se convierten a min/max_delivery_date (hoy + N días)
+  // y Shopify los muestra bajo la tarifa ("Llega entre el X y el Y").
+  minDeliveryDays Int?
+  maxDeliveryDays Int?
   pricingMode     String       @default("flat")  // "flat" | "weight_tiers" | "cart_total"
   weightTiers     String       @default("[]")    // JSON: [{"minKg":0,"maxKg":1,"price":12000},...]
   cartTotalTiers  String       @default("[]")    // JSON: [{"minAmount":0,"maxAmount":100000,"price":12000},...]

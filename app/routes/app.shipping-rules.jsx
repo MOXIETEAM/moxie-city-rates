@@ -69,8 +69,8 @@ const VALID_CONDITIONS = new Set(["all", "include", "exclude"]);
 const VALID_DAYS = new Set(["mon", "tue", "wed", "thu", "fri", "sat", "sun"]);
 
 function getCSVHeaders(locale) {
-  if (locale === "en") return "department,rate_name,service_type,price,city_condition,cities,description,from_time,to_time,days,pricing_mode,weight_ranges,cart_ranges,product_condition,product_tags";
-  return "departamento,nombre_tarifa,tipo_servicio,precio,condicion_ciudad,ciudades,descripcion,hora_desde,hora_hasta,dias,modo_precio,rangos_peso,rangos_monto,condicion_producto,tags_producto";
+  if (locale === "en") return "department,rate_name,service_type,price,city_condition,cities,description,from_time,to_time,days,pricing_mode,weight_ranges,cart_ranges,product_condition,product_tags,delivery_min_days,delivery_max_days";
+  return "departamento,nombre_tarifa,tipo_servicio,precio,condicion_ciudad,ciudades,descripcion,hora_desde,hora_hasta,dias,modo_precio,rangos_peso,rangos_monto,condicion_producto,tags_producto,entrega_min_dias,entrega_max_dias";
 }
 
 /** Parsea una línea CSV respetando campos entre comillas. */
@@ -122,7 +122,7 @@ function parseCSVContent(csvText, t) {
       continue;
     }
 
-    const [dept, name, serviceCode, priceStr, condition, citiesStr, description, timeFrom, timeTo, daysStr, pricingModeStr, weightTiersStr, cartTotalTiersStr, productConditionStr, productTagsStr] = fields;
+    const [dept, name, serviceCode, priceStr, condition, citiesStr, description, timeFrom, timeTo, daysStr, pricingModeStr, weightTiersStr, cartTotalTiersStr, productConditionStr, productTagsStr, minDeliveryStr, maxDeliveryStr] = fields;
 
     // Accept any non-empty region name. Membership in a fixed list can't be
     // enforced internationally (zones now span multiple countries); the zone
@@ -208,6 +208,8 @@ function parseCSVContent(csvText, t) {
       cartTotalTiers,
       productCondition,
       productTags,
+      minDeliveryDays: minDeliveryStr || null,
+      maxDeliveryDays: maxDeliveryStr || null,
     });
   }
 
@@ -424,6 +426,8 @@ export const action = async ({ request }) => {
         cartTotalTiers: formData.get("cartTotalTiers") || "[]",
         productCondition,
         productTags: formData.get("productTags") || "[]",
+        minDeliveryDays: formData.get("minDeliveryDays"),
+        maxDeliveryDays: formData.get("maxDeliveryDays"),
       });
       await syncRulesToMetafield(admin, session.shop);
       return { success: true, message: t("action.rate_saved") };
@@ -513,6 +517,8 @@ export const action = async ({ request }) => {
           cartTotalTiers: JSON.stringify(row.cartTotalTiers),
           productCondition: row.productCondition,
           productTags: JSON.stringify(row.productTags),
+          minDeliveryDays: row.minDeliveryDays,
+          maxDeliveryDays: row.maxDeliveryDays,
         });
         ratesCreated++;
       }
@@ -1134,6 +1140,33 @@ function RateForm({ rate, zoneId, department, onCancel, t, planLimits, enabledSe
 
         <div>
           <label style={{ display: "block", fontSize: "13px", fontWeight: 600, marginBottom: "4px" }}>
+            {t("shipping.delivery_estimate")}
+          </label>
+          <s-stack direction="inline" gap="base" style={{ alignItems: "center" }}>
+            <s-text-field
+              label={t("shipping.delivery_min")}
+              name="minDeliveryDays"
+              type="number"
+              min="0"
+              step="1"
+              value={rate?.minDeliveryDays != null ? String(rate.minDeliveryDays) : ""}
+              style={{ maxWidth: "110px" }}
+            />
+            <s-text-field
+              label={t("shipping.delivery_max")}
+              name="maxDeliveryDays"
+              type="number"
+              min="0"
+              step="1"
+              value={rate?.maxDeliveryDays != null ? String(rate.maxDeliveryDays) : ""}
+              style={{ maxWidth: "110px" }}
+            />
+            <s-text variant="bodySm" tone="subdued">{t("shipping.delivery_hint")}</s-text>
+          </s-stack>
+        </div>
+
+        <div>
+          <label style={{ display: "block", fontSize: "13px", fontWeight: 600, marginBottom: "4px" }}>
             {t("shipping.city_condition")}
           </label>
           <s-stack direction="inline" gap="base">
@@ -1420,6 +1453,13 @@ function RateCard({ rate, zoneId, department, t, planInfo, enabledServices }) {
           <span>{conditionLabel}</span>
           {productLabel && <span>· {productLabel}</span>}
           {scheduleLabel && <span>· {scheduleLabel}</span>}
+          {rate.minDeliveryDays != null && (
+            <span>
+              · {rate.minDeliveryDays === rate.maxDeliveryDays
+                ? t("shipping.delivery_days_single", { n: rate.minDeliveryDays })
+                : t("shipping.delivery_days_range", { min: rate.minDeliveryDays, max: rate.maxDeliveryDays ?? rate.minDeliveryDays })}
+            </span>
+          )}
           {rate.description && <span>· {rate.description}</span>}
         </div>
       </div>
@@ -1619,6 +1659,8 @@ function generateCSV(zones, locale) {
         cTiersStr,
         rate.productCondition || "all",
         pTags.length ? `"${pTags.join(",")}"` : "",
+        rate.minDeliveryDays ?? "",
+        rate.maxDeliveryDays ?? "",
       ];
       lines.push(fields.join(","));
     }

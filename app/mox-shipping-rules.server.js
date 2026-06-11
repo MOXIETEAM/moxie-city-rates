@@ -371,10 +371,27 @@ export async function saveRate({
   cartTotalTiers,
   productCondition,
   productTags,
+  minDeliveryDays,
+  maxDeliveryDays,
 }) {
   // parseFloat (not parseInt): prices are in major currency units and may have
   // minor units for non-zero-decimal currencies (USD 12.99).
   const parsedPrice = parseFloat(price);
+
+  // Días calendario, enteros >= 0. Cualquier valor inválido o vacío → null
+  // (sin estimado). Si solo viene uno de los dos, se duplica al otro para que
+  // el checkout siempre reciba un rango coherente.
+  const parseDays = (v) => {
+    const n = parseInt(v, 10);
+    return Number.isInteger(n) && n >= 0 ? n : null;
+  };
+  let minDays = parseDays(minDeliveryDays);
+  let maxDays = parseDays(maxDeliveryDays);
+  if (minDays !== null && maxDays === null) maxDays = minDays;
+  if (maxDays !== null && minDays === null) minDays = maxDays;
+  if (minDays !== null && maxDays !== null && maxDays < minDays) {
+    [minDays, maxDays] = [maxDays, minDays];
+  }
 
   const fields = {
     name,
@@ -392,6 +409,8 @@ export async function saveRate({
     cartTotalTiers: cartTotalTiers || "[]",
     productCondition: productCondition || "all",
     productTags: productTags || "[]",
+    minDeliveryDays: minDays,
+    maxDeliveryDays: maxDays,
   };
 
   if (id) {
@@ -521,6 +540,8 @@ export async function syncRulesToMetafield(admin, shop) {
 
       if (rate.timeFrom) rule.timeFrom = rate.timeFrom;
       if (rate.timeTo) rule.timeTo = rate.timeTo;
+      if (rate.minDeliveryDays != null) rule.minDeliveryDays = rate.minDeliveryDays;
+      if (rate.maxDeliveryDays != null) rule.maxDeliveryDays = rate.maxDeliveryDays;
       const days = JSON.parse(rate.daysOfWeek || "[]");
       if (days.length > 0) rule.days = days;
 

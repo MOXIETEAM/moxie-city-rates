@@ -152,6 +152,10 @@ async function calculateRates({ shop, province, city, country, weightKg, cartTot
         price_formatted: price > 0 ? formatMoney(price, shopCurrency, undefined) : "Gratis",
         currency: shopCurrency,
         description: rate.description || "",
+        // Estimado en días calendario (null = sin estimado). El widget decide
+        // cómo mostrarlo ("2-4 días").
+        min_delivery_days: rate.minDeliveryDays ?? null,
+        max_delivery_days: rate.maxDeliveryDays ?? null,
       };
     }
   }
