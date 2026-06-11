@@ -9,6 +9,7 @@
 import prisma from "./db.server";
 import { resolveCity, normalizeCityForRules, cityMatchesList } from "./utils/city-resolver.server";
 import { debug, warn, info, error as logError } from "./utils/logger.server";
+import { invalidateProductConditionFields } from "./utils/product-info.server";
 
 export { resolveCity };
 
@@ -413,7 +414,11 @@ export async function updateZoneEnabledServices(shop, zoneId, enabledServices) {
 export async function deleteZone(id, shop) {
   const zone = await prisma.shippingZone.findFirst({ where: { id, shop } });
   if (!zone) throw new Error("Zone not found or unauthorized");
-  return prisma.shippingZone.delete({ where: { id } });
+  const deleted = await prisma.shippingZone.delete({ where: { id } });
+  // El delete cascadea a las rates de la zona — el set de campos de producto
+  // usados puede haber cambiado.
+  invalidateProductConditionFields(shop);
+  return deleted;
 }
 
 export async function saveRate({
@@ -455,8 +460,25 @@ export async function saveRate({
   if (!VALID_FIELDS.has(normalizedProductField)) normalizedProductField = "tags";
   const normalizedMatchMode = productMatchMode === "all" ? "all" : "any";
   // parseFloat (not parseInt): prices are in major currency units and may have
-  // minor units for non-zero-decimal currencies (USD 12.99).
-  const parsedPrice = parseFloat(price);
+  // minor units for non-zero-decimal currencies (USD 12.99). Clamp a >= 0 —
+  // un precio negativo llegaría tal cual al checkout de Shopify (comportamiento
+  // indefinido) y no hay caso de uso legítimo; gratis = 0.
+  const parsedPrice = Math.max(0, parseFloat(price) || 0);
+
+  // Mismo clamp para los precios dentro de los tiers (UI y CSV los mandan
+  // como JSON ya armado).
+  const clampTierPrices = (json) => {
+    try {
+      const tiers = JSON.parse(json || "[]");
+      if (!Array.isArray(tiers)) return "[]";
+      for (const tier of tiers) {
+        tier.price = Math.max(0, Number(tier.price) || 0);
+      }
+      return JSON.stringify(tiers);
+    } catch {
+      return "[]";
+    }
+  };
 
   // Días calendario, enteros >= 0. Cualquier valor inválido o vacío → null
   // (sin estimado). Si solo viene uno de los dos, se duplica al otro para que
@@ -476,7 +498,7 @@ export async function saveRate({
   const fields = {
     name,
     serviceCode,
-    price: isNaN(parsedPrice) ? 0 : parsedPrice,
+    price: parsedPrice,
     description: description || "",
     cityCondition: cityCondition || "all",
     cities: cities || "[]",
@@ -485,8 +507,8 @@ export async function saveRate({
     timeTo: timeTo || null,
     daysOfWeek: daysOfWeek || "[]",
     pricingMode: pricingMode || "flat",
-    weightTiers: weightTiers || "[]",
-    cartTotalTiers: cartTotalTiers || "[]",
+    weightTiers: clampTierPrices(weightTiers),
+    cartTotalTiers: clampTierPrices(cartTotalTiers),
     productCondition: normalizedProductCondition,
     productField: normalizedProductField,
     productMatchMode: normalizedMatchMode,
@@ -500,7 +522,9 @@ export async function saveRate({
       where: { id, zone: { shop } },
     });
     if (!existing) throw new Error("Rate not found or unauthorized");
-    return prisma.shippingRate.update({ where: { id }, data: fields });
+    const updated = await prisma.shippingRate.update({ where: { id }, data: fields });
+    if (shop) invalidateProductConditionFields(shop);
+    return updated;
   }
 
   if (shop) {
@@ -508,12 +532,14 @@ export async function saveRate({
     if (!zone) throw new Error("Zone not found or unauthorized");
   }
 
-  return prisma.shippingRate.create({
+  const created = await prisma.shippingRate.create({
     data: {
       ...fields,
       zone: { connect: { id: zoneId } },
     },
   });
+  if (shop) invalidateProductConditionFields(shop);
+  return created;
 }
 
 /**
@@ -527,13 +553,15 @@ export async function duplicateRate(id, shop, nameSuffix) {
   if (!rate) throw new Error("Rate not found or unauthorized");
 
   const { id: _id, createdAt: _c, updatedAt: _u, zoneId, name, ...fields } = rate;
-  return prisma.shippingRate.create({
+  const created = await prisma.shippingRate.create({
     data: {
       ...fields,
       name: `${name}${nameSuffix || " (copy)"}`,
       zone: { connect: { id: zoneId } },
     },
   });
+  invalidateProductConditionFields(shop);
+  return created;
 }
 
 export async function deleteRate(id, shop) {
@@ -541,7 +569,9 @@ export async function deleteRate(id, shop) {
     where: { id, zone: { shop } },
   });
   if (!rate) throw new Error("Rate not found or unauthorized");
-  return prisma.shippingRate.delete({ where: { id } });
+  const deleted = await prisma.shippingRate.delete({ where: { id } });
+  invalidateProductConditionFields(shop);
+  return deleted;
 }
 
 // --- Sync to shop metafield ---

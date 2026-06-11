@@ -13,6 +13,11 @@ import { warn } from "./logger.server";
 
 export const QUOTE_RETENTION_DAYS = 30;
 const CLEANUP_EVERY = 50;
+// Caps por registro: con cientos de reglas, decisions/steps crecerían sin
+// límite y engordan la DB en cada checkout. 200 decisiones cubren cualquier
+// tienda razonable; el resto se trunca con un marcador.
+const MAX_DECISIONS = 200;
+const MAX_STEPS = 50;
 let writesSinceCleanup = 0;
 
 /**
@@ -57,6 +62,14 @@ export async function saveQuote({
   ratesReturned = [],
 }) {
   try {
+    let decisions = trace?.rules || [];
+    if (decisions.length > MAX_DECISIONS) {
+      const dropped = decisions.length - MAX_DECISIONS;
+      decisions = decisions.slice(0, MAX_DECISIONS);
+      decisions.push({ rateId: "_truncated", name: `… +${dropped}`, serviceCode: "", zone: "", matched: false, reason: "truncated" });
+    }
+    const steps = (trace?.steps || []).slice(0, MAX_STEPS);
+
     await prisma.rateQuote.create({
       data: {
         shop,
@@ -72,8 +85,8 @@ export async function saveQuote({
         cartTotal,
         currency,
         items: JSON.stringify(summarizeItems(items)),
-        decisions: JSON.stringify(trace?.rules || []),
-        steps: JSON.stringify(trace?.steps || []),
+        decisions: JSON.stringify(decisions),
+        steps: JSON.stringify(steps),
         ratesReturned: JSON.stringify(ratesReturned),
         rateCount: ratesReturned.length,
       },

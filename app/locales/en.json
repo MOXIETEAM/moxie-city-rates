@@ -319,6 +319,7 @@
     "reason_product_exclude": "Excluded product tag in cart",
     "reason_schedule": "Outside schedule",
     "reason_zone_overrides_default": "Covered by destination zone",
-    "sim_product_attrs": "Test product attributes (vendor, SKU, type, collection)"
+    "sim_product_attrs": "Test product attributes (vendor, SKU, type, collection)",
+    "reason_truncated": "List truncated"
   }
 }

@@ -1090,6 +1090,7 @@ function RateForm({ rate, zoneId, department, onCancel, t, planLimits, enabledSe
               name="price"
               type="number"
               step="any"
+              min="0"
               value={String(rate?.price || "")}
               required
               style={{ maxWidth: "140px" }}

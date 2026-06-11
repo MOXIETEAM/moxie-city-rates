@@ -319,6 +319,7 @@
     "reason_product_exclude": "Tag de producto excluido",
     "reason_schedule": "Fuera de horario",
     "reason_zone_overrides_default": "Cubierta por la zona del destino",
-    "sim_product_attrs": "Atributos del producto de prueba (vendor, SKU, tipo, colección)"
+    "sim_product_attrs": "Atributos del producto de prueba (vendor, SKU, tipo, colección)",
+    "reason_truncated": "Lista truncada"
   }
 }
