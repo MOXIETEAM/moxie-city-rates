@@ -80,6 +80,49 @@ export function provinceToSlug(country, province) {
   return toSlug(province);
 }
 
+// --- Multi-país: slugs de zona con prefijo de país ---
+//
+// Contrato: zonas de Colombia conservan el slug histórico sin prefijo
+// ("antioquia") — themes desplegados y filas existentes no se tocan. Zonas de
+// cualquier otro país llevan prefijo ISO ("mx_jalisco", "us_california") para
+// que subdivisiones homónimas de países distintos no colisionen (la llave de
+// búsqueda es [shop, slug], sin país).
+
+/** Prefijo de slug para un país ("" para CO, "mx_" para MX, etc.). */
+export function zoneSlugPrefix(country) {
+  return country && country !== DEFAULT_COUNTRY ? `${country.toLowerCase()}_` : "";
+}
+
+/** Slug de zona al CREAR: nombre de la subdivisión + prefijo de país. */
+export function zoneSlugForCountry(country, departmentName) {
+  return zoneSlugPrefix(country) + toSlug(departmentName);
+}
+
+/**
+ * Slugs candidatos para buscar la zona de un destino en checkout, en orden de
+ * prioridad: primero el prefijado (esquema nuevo), luego el legacy sin prefijo
+ * (zonas no-CO creadas antes del prefijo). Para CO ambos coinciden → uno solo.
+ */
+export function provinceToZoneSlugCandidates(country, province) {
+  const legacy = provinceToSlug(country, province);
+  if (!legacy) return [];
+  const prefixed = zoneSlugPrefix(country) + legacy;
+  return prefixed === legacy ? [legacy] : [prefixed, legacy];
+}
+
+/**
+ * Slug de la zona default que aplica a un país destino. El slug histórico
+ * `_default` queda reservado para el país de la tienda; otros países usan
+ * `_default_{cc}`. Un destino sin default propio NO cae al default de la
+ * tienda — eso evitaba que un cliente en México recibiera la tarifa default
+ * pensada para Colombia.
+ */
+export function defaultZoneSlugFor(destCountry, shopCountry) {
+  const dest = destCountry || DEFAULT_COUNTRY;
+  const home = shopCountry || DEFAULT_COUNTRY;
+  return dest === home ? "_default" : `_default_${dest.toLowerCase()}`;
+}
+
 /** Display name for a province code, falling back to the raw value. */
 export function provinceDisplayName(country, province) {
   if (!province) return "";

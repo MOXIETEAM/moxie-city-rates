@@ -194,7 +194,9 @@
     "product_values_placeholder_sku": "SKU-001, SKU-002",
     "collection_hint": "Acepta handle o título de la colección (sin distinguir mayúsculas).",
     "product_include_label": "Solo",
-    "product_exclude_label": "Excluye"
+    "product_exclude_label": "Excluye",
+    "default_country_note": "Estas tarifas por defecto aplican SOLO a destinos en {{country}} que no tengan zona configurada.",
+    "zone_currency_note": "Los precios de esta zona se cobran en {{currency}} (la moneda de tu tienda). Shopify los convierte automáticamente a la moneda del cliente si usas Markets."
   },
   "action": {
     "zone_created": "Zona \"{{dept}}\" creada y sincronizada",

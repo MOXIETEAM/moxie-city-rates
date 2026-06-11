@@ -13,12 +13,12 @@
  * las tarifas con condiciones de producto.
  */
 
-import { getRatesForDestination, resolveCity, getZoneDefinedServiceCodes } from "../mox-shipping-rules.server";
+import { getRatesForDestination, resolveCity, getZoneDefinedServiceCodes, resolveExistingZoneSlug } from "../mox-shipping-rules.server";
 import { debug } from "../utils/logger.server";
 import { checkLimit, getShopPlanForStorefront } from "../utils/billing.server";
 import { verifyAppProxyOrUnauthorized } from "../utils/app-proxy-auth.server";
 import { consume, getClientIp, rateLimitedResponse } from "../utils/rate-limit.server";
-import { provinceToSlug, provinceDisplayName, formatMoney } from "../utils/geo";
+import { provinceToZoneSlugCandidates, provinceDisplayName, formatMoney, defaultZoneSlugFor } from "../utils/geo";
 import { getShopMeta } from "../utils/shop-record.server";
 import {
   getProductConditionFields,
@@ -120,7 +120,7 @@ async function calculateRates({ shop, province, city, country, weightKg, cartTot
   const destCountry = country || shopMeta.country || "CO";
   const shopCurrency = shopMeta.currency || "COP";
 
-  const departmentSlug = provinceToSlug(destCountry, province);
+  const departmentSlug = await resolveExistingZoneSlug(shop, provinceToZoneSlugCandidates(destCountry, province));
   const departmentName = provinceDisplayName(destCountry, province);
   const cityResolution = resolveCity(city || "", departmentName, destCountry);
   const resolvedCity = cityResolution.resolved;
@@ -136,7 +136,7 @@ async function calculateRates({ shop, province, city, country, weightKg, cartTot
   const zoneRates = zoneDefinedCodes.size
     ? await getRatesForDestination(shop, departmentSlug, resolvedCity, departmentName, null, rateOpts)
     : [];
-  const defaultRates = await getRatesForDestination(shop, "_default", "", null, null, rateOpts);
+  const defaultRates = await getRatesForDestination(shop, defaultZoneSlugFor(destCountry, shopMeta.country), "", null, null, rateOpts);
   const defaultFillIn = defaultRates.filter((r) => !zoneDefinedCodes.has(r.serviceCode));
   const rates = [...zoneRates, ...defaultFillIn];
 

@@ -10,8 +10,8 @@ import {
   saveRate,
   deleteRate,
   duplicateRate,
+  getOrCreateDefaultZoneForCountry,
   syncRulesToMetafield,
-  getOrCreateDefaultZone,
   updateZoneEnabledServices,
 } from "../mox-shipping-rules.server";
 import { createTranslator, getLocale } from "../utils/i18n";
@@ -24,7 +24,7 @@ import { getShopMeta } from "../utils/shop-record.server";
 import prisma from "../db.server";
 
 import MUNICIPALITIES from "../data/municipalities.json";
-import { getSubdivisions, isSupportedCountry, formatMoney } from "../utils/geo";
+import { getSubdivisions, isSupportedCountry, formatMoney, getCountries, zoneSlugForCountry } from "../utils/geo";
 
 // Shop currency + subdivision list, provided once at the page root so the
 // nested rate/zone components format money in the shop currency and offer the
@@ -70,8 +70,8 @@ const VALID_CONDITIONS = new Set(["all", "include", "exclude"]);
 const VALID_DAYS = new Set(["mon", "tue", "wed", "thu", "fri", "sat", "sun"]);
 
 function getCSVHeaders(locale) {
-  if (locale === "en") return "department,rate_name,service_type,price,city_condition,cities,description,from_time,to_time,days,pricing_mode,weight_ranges,cart_ranges,product_condition,product_tags,delivery_min_days,delivery_max_days,product_field,product_match_mode";
-  return "departamento,nombre_tarifa,tipo_servicio,precio,condicion_ciudad,ciudades,descripcion,hora_desde,hora_hasta,dias,modo_precio,rangos_peso,rangos_monto,condicion_producto,tags_producto,entrega_min_dias,entrega_max_dias,campo_producto,modo_producto";
+  if (locale === "en") return "department,rate_name,service_type,price,city_condition,cities,description,from_time,to_time,days,pricing_mode,weight_ranges,cart_ranges,product_condition,product_tags,delivery_min_days,delivery_max_days,product_field,product_match_mode,country";
+  return "departamento,nombre_tarifa,tipo_servicio,precio,condicion_ciudad,ciudades,descripcion,hora_desde,hora_hasta,dias,modo_precio,rangos_peso,rangos_monto,condicion_producto,tags_producto,entrega_min_dias,entrega_max_dias,campo_producto,modo_producto,pais";
 }
 
 /** Parsea una línea CSV respetando campos entre comillas. */
@@ -123,7 +123,7 @@ function parseCSVContent(csvText, t) {
       continue;
     }
 
-    const [dept, name, serviceCode, priceStr, condition, citiesStr, description, timeFrom, timeTo, daysStr, pricingModeStr, weightTiersStr, cartTotalTiersStr, productConditionStr, productTagsStr, minDeliveryStr, maxDeliveryStr, productFieldStr, productMatchModeStr] = fields;
+    const [dept, name, serviceCode, priceStr, condition, citiesStr, description, timeFrom, timeTo, daysStr, pricingModeStr, weightTiersStr, cartTotalTiersStr, productConditionStr, productTagsStr, minDeliveryStr, maxDeliveryStr, productFieldStr, productMatchModeStr, countryStr] = fields;
 
     // Accept any non-empty region name. Membership in a fixed list can't be
     // enforced internationally (zones now span multiple countries); the zone
@@ -217,6 +217,8 @@ function parseCSVContent(csvText, t) {
       productTags,
       minDeliveryDays: minDeliveryStr || null,
       maxDeliveryDays: maxDeliveryStr || null,
+      // ISO-2 opcional; vacío = país de la tienda (se resuelve en el import).
+      country: /^[A-Za-z]{2}$/.test(countryStr || "") ? countryStr.toUpperCase() : null,
     });
   }
 
@@ -231,7 +233,7 @@ export const loader = async ({ request }) => {
   // Each external dependency wrapped so a transient failure renders a degraded
   // page instead of a 500. Shopify App Review rejects on any uncaught 500.
   let zones = [];
-  let defaultZone = null;
+  let defaultZones = [];
   let planInfo;
   // Shop currency / timezone / country — replaces the Colombia-only DEPARTMENTS
   // list, COP labels and es-CO number formatting. Never throws (falls back to
@@ -246,9 +248,18 @@ export const loader = async ({ request }) => {
     logError("[shipping-rules loader] getZonesWithRates failed:", e?.message || e);
   }
   try {
-    defaultZone = await getOrCreateDefaultZone(session.shop, shopMeta.country);
+    // Un default por país: siempre el del país de la tienda + uno por cada
+    // país que ya tenga zonas creadas (multi-mercado).
+    const shopCountry = shopMeta.country || "CO";
+    const countrySet = new Set([shopCountry]);
+    for (const z of zones) {
+      if (z.country && !z.slug.startsWith("_default")) countrySet.add(z.country);
+    }
+    for (const c of countrySet) {
+      defaultZones.push(await getOrCreateDefaultZoneForCountry(session.shop, c, shopCountry));
+    }
   } catch (e) {
-    logError("[shipping-rules loader] getOrCreateDefaultZone failed:", e?.message || e);
+    logError("[shipping-rules loader] getOrCreateDefaultZoneForCountry failed:", e?.message || e);
   }
   try {
     planInfo = await getShopPlan(billing, session.shop, admin);
@@ -275,16 +286,40 @@ export const loader = async ({ request }) => {
     }
   }
 
+  // Países soportados + subdivisiones de cada uno para el selector de país
+  // del formulario "Agregar zona" (multi-mercado).
+  const countries = getCountries();
+  const subdivisionsByCountry = {};
+  for (const c of countries) {
+    subdivisionsByCountry[c.code] = getSubdivisions(c.code).map((s) => s.name);
+  }
+
+  // Países a los que la tienda realmente vende (Shopify Markets). El selector
+  // de país solo ofrece estos — sin ruido de países donde no opera. Si la
+  // query falla, null = mostrar todos los del dataset (fail open).
+  let shipsToCountries = null;
+  try {
+    const res = await admin.graphql(`query { shop { shipsToCountries } }`);
+    const data = await res.json();
+    const list = data.data?.shop?.shipsToCountries;
+    if (Array.isArray(list) && list.length > 0) shipsToCountries = list;
+  } catch (e) {
+    logError("[shipping-rules loader] shipsToCountries failed:", e?.message || e);
+  }
+
   return {
     zones,
-    defaultZone,
+    defaultZones,
     planInfo,
     planSelectionUrl,
     billingMode: process.env.BILLING_MODE === "managed" ? "managed" : "api",
-    shopCountry: shopMeta.country,
+    shopCountry: shopMeta.country || "CO",
     shopCurrency: shopMeta.currency,
     cityMatchThreshold: shopMeta.cityMatchThreshold,
     subdivisions,
+    countries,
+    subdivisionsByCountry,
+    shipsToCountries,
   };
 };
 
@@ -303,6 +338,12 @@ export const action = async ({ request }) => {
       const department = formData.get("department");
       if (!department) return { error: t("action.select_department") };
 
+      // País de la zona (multi-mercado). Cualquier ISO-2 válido se acepta —
+      // el dataset solo gatea el catálogo de subdivisiones, no la validez del
+      // país (la tienda puede vender a países sin catálogo, con región libre).
+      const rawCountry = String(formData.get("country") || "").toUpperCase();
+      const zoneCountry = /^[A-Z]{2}$/.test(rawCountry) ? rawCountry : (shopMeta.country || "CO");
+
       const currentZoneCount = await prisma.shippingZone.count({ where: { shop: session.shop } });
       if (!checkLimit(planInfo, "zones", currentZoneCount)) {
         return { error: t("billing.limit_zones", { max: planInfo.limits.maxZones }) };
@@ -312,7 +353,7 @@ export const action = async ({ request }) => {
       // merchant's Shopify Locations. Falls back to all services on any failure.
       const enabledServices = await detectEnabledServicesForDepartment(admin, department);
 
-      await createZone(session.shop, department, enabledServices, shopMeta.country);
+      await createZone(session.shop, department, enabledServices, zoneCountry);
       await syncRulesToMetafield(admin, session.shop);
       return { success: true, message: t("action.zone_created", { dept: department }) };
     }
@@ -491,11 +532,12 @@ export const action = async ({ request }) => {
         return { error: `No se encontraron filas válidas.${parseErrors.length ? " " + parseErrors.join("; ") : ""}` };
       }
 
-      // Mapa de zonas existentes por departamento
+      // Mapa de zonas existentes por país+departamento (multi-mercado: el
+      // mismo nombre de subdivisión puede existir en dos países).
       const existingZones = await getZonesWithRates(session.shop);
       const zoneByDept = {};
       for (const z of existingZones) {
-        zoneByDept[z.department] = z;
+        zoneByDept[`${z.country || "CO"}|${z.department}`] = z;
       }
 
       // Pre-fetch Locations once for the whole import so each new zone gets
@@ -506,7 +548,9 @@ export const action = async ({ request }) => {
       let ratesCreated = 0;
 
       for (const row of rows) {
-        if (!zoneByDept[row.department]) {
+        const rowCountry = row.country || shopMeta.country || "CO";
+        const zoneKey = `${rowCountry}|${row.department}`;
+        if (!zoneByDept[zoneKey]) {
           const slug = row.department
             .toLowerCase()
             .normalize("NFD")
@@ -516,13 +560,13 @@ export const action = async ({ request }) => {
           const enabledServices = locationsMap[slug] ?? locationsMap.default ?? [
             "mox_envio", "mox_express", "mox_pickup",
           ];
-          const newZone = await createZone(session.shop, row.department, enabledServices, shopMeta.country);
-          zoneByDept[row.department] = newZone;
+          const newZone = await createZone(session.shop, row.department, enabledServices, rowCountry);
+          zoneByDept[zoneKey] = newZone;
           zonesCreated++;
         }
 
         await saveRate({
-          zoneId: zoneByDept[row.department].id,
+          zoneId: zoneByDept[zoneKey].id,
           shop: session.shop,
           name: row.name,
           serviceCode: row.serviceCode,
@@ -1652,7 +1696,9 @@ function ZoneServicesEditor({ zone, enabledServices, t }) {
   );
 }
 
-function ZoneSection({ zone, t, planInfo }) {
+function ZoneSection({ zone, t, planInfo, shopCountry, countryName }) {
+  const currency = useShopCurrency();
+  const isForeign = zone.country && shopCountry && zone.country !== shopCountry;
   const deleteFetcher = useFetcher();
   const [showAddRate, setShowAddRate] = useState(false);
   const isDeleting = deleteFetcher.state !== "idle";
@@ -1669,8 +1715,13 @@ function ZoneSection({ zone, t, planInfo }) {
   }, [zone.enabledServices]);
 
   return (
-    <s-section heading={zone.department}>
+    <s-section heading={isForeign ? `${zone.department} — ${countryName ? countryName(zone.country) : zone.country}` : zone.department}>
       <s-stack direction="block" gap="base">
+        {isForeign && (
+          <s-text variant="bodySm" tone="subdued">
+            {t("shipping.zone_currency_note", { currency })}
+          </s-text>
+        )}
         <ZoneServicesEditor zone={zone} enabledServices={enabledServices} t={t} />
         {zone.rates.map((rate) => (
           <RateCard key={rate.id} rate={rate} zoneId={zone.id} department={zone.department} t={t} planInfo={planInfo} enabledServices={enabledServices} />
@@ -1754,6 +1805,7 @@ function generateCSV(zones, locale) {
         rate.maxDeliveryDays ?? "",
         rate.productField || "tags",
         rate.productMatchMode || "any",
+        zone.country || "CO",
       ];
       lines.push(fields.join(","));
     }
@@ -1775,10 +1827,16 @@ function downloadCSV(content, filename) {
 // --- Page ---
 
 export default function ShippingRules() {
-  const { zones: allZones, defaultZone, planInfo, planSelectionUrl, billingMode, shopCurrency, subdivisions, cityMatchThreshold } = useLoaderData();
+  const { zones: allZones, defaultZones, planInfo, planSelectionUrl, billingMode, shopCountry, shopCurrency, subdivisions, cityMatchThreshold, countries, subdivisionsByCountry, shipsToCountries } = useLoaderData();
   const { locale } = useOutletContext();
   const t = createTranslator(locale);
-  const zones = allZones.filter((z) => z.slug !== "_default");
+  const zones = allZones.filter((z) => !z.slug.startsWith("_default"));
+  // Default del país de la tienda primero, luego los demás por código.
+  const sortedDefaults = [...(defaultZones || [])].sort((a, b) =>
+    (a.country === shopCountry ? -1 : b.country === shopCountry ? 1 : a.country.localeCompare(b.country)));
+  const [defaultCountryTab, setDefaultCountryTab] = useState(shopCountry);
+  const defaultZone = sortedDefaults.find((z) => z.country === defaultCountryTab) || sortedDefaults[0];
+  const countryName = (code) => countries.find((c) => c.code === code)?.name || code;
   const isPro = planInfo.plan === PLAN_PRO;
   const csvAllowed = planInfo.limits.csvImportExport === true;
   const createFetcher = useFetcher();
@@ -1794,14 +1852,32 @@ export default function ShippingRules() {
   const isCsvLoading = csvFetcher.state !== "idle";
 
   const existingSlugs = new Set(zones.map((z) => z.slug));
-  // Subdivisions of the shop country (from the loader). Empty when the shop
-  // country isn't in our dataset \u2014 the add-zone UI then offers free-text entry.
-  const regionList = subdivisions && subdivisions.length > 0 ? subdivisions : DEPARTMENTS;
-  const hasRegionCatalog = subdivisions && subdivisions.length > 0;
+  // Pa\u00eds seleccionado en el formulario "Agregar zona" (multi-mercado).
+  const [newZoneCountry, setNewZoneCountry] = useState(shopCountry);
+  // Subdivisiones del pa\u00eds seleccionado. Pa\u00eds sin cat\u00e1logo \u2192 texto libre.
+  const countryRegions = subdivisionsByCountry?.[newZoneCountry] || [];
+  const regionList = countryRegions.length > 0 ? countryRegions
+    : (newZoneCountry === shopCountry && subdivisions && subdivisions.length > 0 ? subdivisions : []);
+  const hasRegionCatalog = regionList.length > 0;
   const availableDepartments = regionList.filter((d) => {
-    const slug = d.toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "").replace(/[^a-z0-9]+/g, "_").replace(/^_|_$/g, "");
-    return !existingSlugs.has(slug);
+    const base = d.toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "").replace(/[^a-z0-9]+/g, "_").replace(/^_|_$/g, "");
+    const prefix = newZoneCountry && newZoneCountry !== "CO" ? `${newZoneCountry.toLowerCase()}_` : "";
+    return !existingSlugs.has(prefix + base);
   });
+  // Selector de pa\u00eds: solo pa\u00edses a los que la tienda VENDE (Shopify Markets).
+  // Sin esa info (query fall\u00f3) \u2192 todos los del dataset. El pa\u00eds de la tienda
+  // siempre est\u00e1 disponible.
+  const datasetByCode = new Map(countries.map((c) => [c.code, c]));
+  let countryOptions;
+  if (Array.isArray(shipsToCountries) && shipsToCountries.length > 0) {
+    const codes = new Set(shipsToCountries);
+    codes.add(shopCountry);
+    countryOptions = [...codes].sort().map((code) => datasetByCode.get(code) || { code, name: code });
+  } else {
+    countryOptions = countries.some((c) => c.code === shopCountry)
+      ? countries
+      : [{ code: shopCountry, name: shopCountry }, ...countries];
+  }
 
   // Toast notifications
   const showToast = useCallback((data) => {
@@ -1847,7 +1923,7 @@ export default function ShippingRules() {
   const [showAddDefault, setShowAddDefault] = useState(false);
 
   const canAddZone = allZones.length < planInfo.limits.maxZones;
-  const canAddDefaultRate = defaultZone.rates.length < planInfo.limits.maxRatesPerZone;
+  const canAddDefaultRate = (defaultZone?.rates.length ?? 0) < planInfo.limits.maxRatesPerZone;
 
   return (
     <ShopMetaContext.Provider value={{ currency: shopCurrency, subdivisions }}>
@@ -1926,11 +2002,31 @@ export default function ShippingRules() {
         </s-section>
       )}
 
+      {defaultZone && (
       <s-section heading={t("shipping.default_title")}>
         <s-stack direction="block" gap="base">
           <s-text variant="bodySm" tone="subdued">
             {t("shipping.default_desc")}
           </s-text>
+          {sortedDefaults.length > 1 && (
+            <s-stack direction="inline" gap="small-200">
+              {sortedDefaults.map((z) => (
+                <s-button
+                  key={z.country}
+                  variant={z.country === defaultZone.country ? "primary" : "secondary"}
+                  size="small"
+                  onClick={() => setDefaultCountryTab(z.country)}
+                >
+                  {countryName(z.country)}
+                </s-button>
+              ))}
+            </s-stack>
+          )}
+          {sortedDefaults.length > 1 && (
+            <s-text variant="bodySm" tone="subdued">
+              {t("shipping.default_country_note", { country: countryName(defaultZone.country) })}
+            </s-text>
+          )}
           {defaultZone.rates.map((rate) => (
             <RateCard
               key={rate.id}
@@ -1973,16 +2069,30 @@ export default function ShippingRules() {
           )}
         </s-stack>
       </s-section>
+      )}
 
       {zones.map((zone) => (
-        <ZoneSection key={zone.id} zone={zone} t={t} planInfo={planInfo} />
+        <ZoneSection key={zone.id} zone={zone} t={t} planInfo={planInfo} shopCountry={shopCountry} countryName={countryName} />
       ))}
 
       <s-section heading={t("shipping.add_department")}>
         <createFetcher.Form method="post">
           <input type="hidden" name="_intent" value="create_zone" />
+          <input type="hidden" name="country" value={newZoneCountry} />
           <s-stack direction="block" gap="small">
             <s-stack direction="inline" gap="base">
+              <div>
+                <select
+                  value={newZoneCountry}
+                  onChange={(e) => setNewZoneCountry(e.target.value)}
+                  disabled={!canAddZone}
+                  style={{ padding: "8px 12px", borderRadius: "8px", border: "1px solid #ccc", minWidth: "140px" }}
+                >
+                  {countryOptions.map((c) => (
+                    <option key={c.code} value={c.code}>{c.name}</option>
+                  ))}
+                </select>
+              </div>
               <div>
                 {hasRegionCatalog ? (
                   <select

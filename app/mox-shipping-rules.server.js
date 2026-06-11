@@ -10,6 +10,7 @@ import prisma from "./db.server";
 import { resolveCity, normalizeCityForRules, cityMatchesList } from "./utils/city-resolver.server";
 import { debug, warn, info, error as logError } from "./utils/logger.server";
 import { invalidateProductConditionFields } from "./utils/product-info.server";
+import { zoneSlugForCountry, defaultZoneSlugFor } from "./utils/geo";
 
 export { resolveCity };
 
@@ -240,7 +241,7 @@ export async function getRatesForDestination(shop, departmentSlug, city, departm
   // pickup was turned off) must not appear at checkout. Default zone bypasses
   // this filter — it's the catch-all and always offers all 3 methods.
   let enabledServicesForZone = null;
-  if (zone.slug !== DEFAULT_ZONE_SLUG) {
+  if (!zone.slug.startsWith(DEFAULT_ZONE_SLUG)) {
     try {
       const parsed = JSON.parse(zone.enabledServices || "[]");
       if (Array.isArray(parsed) && parsed.length > 0) {
@@ -384,14 +385,56 @@ export async function getOrCreateDefaultZone(shop, country = "CO") {
 }
 
 /**
+ * Default por país: `_default` (legacy) para el país de la tienda,
+ * `_default_{cc}` para los demás. El checkout solo usa el default del país
+ * destino — un destino sin default propio no hereda el de otro país.
+ */
+export async function getOrCreateDefaultZoneForCountry(shop, country, shopCountry) {
+  const slug = defaultZoneSlugFor(country, shopCountry);
+  if (slug === DEFAULT_ZONE_SLUG) return getOrCreateDefaultZone(shop, country);
+
+  let zone = await prisma.shippingZone.findUnique({
+    where: { shop_slug: { shop, slug } },
+    include: { rates: { orderBy: { createdAt: "asc" } } },
+  });
+
+  if (!zone) {
+    zone = await prisma.shippingZone.create({
+      data: { shop, department: `${DEFAULT_ZONE_NAME} (${country})`, slug, country },
+      include: { rates: true },
+    });
+  }
+
+  return zone;
+}
+
+/**
+ * De una lista de slugs candidatos (prefijado primero, legacy después),
+ * retorna el primero que exista como zona de la tienda. Si ninguno existe,
+ * retorna el primero (el lookup posterior no encontrará zona → aplica default).
+ */
+export async function resolveExistingZoneSlug(shop, candidateSlugs) {
+  if (!candidateSlugs?.length) return null;
+  if (candidateSlugs.length === 1) return candidateSlugs[0];
+  const zones = await prisma.shippingZone.findMany({
+    where: { shop, slug: { in: candidateSlugs } },
+    select: { slug: true },
+  });
+  const found = new Set(zones.map((z) => z.slug));
+  for (const slug of candidateSlugs) {
+    if (found.has(slug)) return slug;
+  }
+  return candidateSlugs[0];
+}
+
+/**
  * Crea una zona. `department` debe ser el NOMBRE de la subdivisión (ej
- * "Antioquia", "California"); el slug se deriva de él y debe coincidir con
- * `provinceToSlug(country, código)` que usa el carrier service en checkout.
- * `country` es metadata (gatea catálogo de ciudades + selector de UI), no
- * forma parte de la llave de búsqueda — el slug sigue siendo único por tienda.
+ * "Antioquia", "Jalisco"); el slug se deriva de él con prefijo de país para
+ * países distintos de CO ("mx_jalisco") y debe coincidir con los candidatos
+ * de `provinceToZoneSlugCandidates(country, código)` que usa el checkout.
  */
 export async function createZone(shop, department, enabledServices, country = "CO") {
-  const slug = toSlug(department);
+  const slug = zoneSlugForCountry(country, department);
   const data = { shop, department, slug, country };
   if (Array.isArray(enabledServices) && enabledServices.length > 0) {
     data.enabledServices = JSON.stringify(enabledServices);
@@ -645,7 +688,7 @@ export async function syncRulesToMetafield(admin, shop) {
     rules[zone.slug] = {};
 
     let enabledServicesForZone = null;
-    if (zone.slug !== DEFAULT_ZONE_SLUG) {
+    if (!zone.slug.startsWith(DEFAULT_ZONE_SLUG)) {
       try {
         const parsed = JSON.parse(zone.enabledServices || "[]");
         if (Array.isArray(parsed) && parsed.length > 0) {

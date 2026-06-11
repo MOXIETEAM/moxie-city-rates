@@ -194,7 +194,9 @@
     "product_values_placeholder_sku": "SKU-001, SKU-002",
     "collection_hint": "Accepts collection handle or title (case-insensitive).",
     "product_include_label": "Only",
-    "product_exclude_label": "Excludes"
+    "product_exclude_label": "Excludes",
+    "default_country_note": "These default rates apply ONLY to destinations in {{country}} without a configured zone.",
+    "zone_currency_note": "Prices in this zone are charged in {{currency}} (your shop currency). Shopify converts them to the customer's currency automatically when using Markets."
   },
   "action": {
     "zone_created": "Zone \"{{dept}}\" created and synced",

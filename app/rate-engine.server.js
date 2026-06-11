@@ -14,9 +14,9 @@
  * comporta igual sin costo extra.
  */
 
-import { getRatesForDestination, resolveCity, getZoneDefinedServiceCodes } from "./mox-shipping-rules.server";
+import { getRatesForDestination, resolveCity, getZoneDefinedServiceCodes, resolveExistingZoneSlug } from "./mox-shipping-rules.server";
 import { debug } from "./utils/logger.server";
-import { provinceToSlug, provinceDisplayName } from "./utils/geo";
+import { provinceToZoneSlugCandidates, provinceDisplayName, defaultZoneSlugFor } from "./utils/geo";
 
 export const CARRIER_SERVICE_CODES = new Set(["mox_express", "mox_envio", "mox_pickup"]);
 
@@ -309,7 +309,10 @@ function annotateSelection(trace, matchingRates, finalCodes, cartWeightKg, cartT
  * }>}
  */
 export async function quoteShipping({ shop, destCountry, province, city, items, shopMeta, itemTags = null, cartProducts = null, trace = null }) {
-  const departmentSlug = provinceToSlug(destCountry, province);
+  // Zonas no-CO usan slug prefijado ("mx_jalisco"); el candidato legacy sin
+  // prefijo cubre zonas creadas antes del esquema multi-país.
+  const slugCandidates = provinceToZoneSlugCandidates(destCountry, province);
+  const departmentSlug = await resolveExistingZoneSlug(shop, slugCandidates);
   const departmentName = provinceDisplayName(destCountry, province);
 
   const cityResolution = resolveCity(city || "", departmentName, destCountry);
@@ -347,7 +350,10 @@ export async function quoteShipping({ shop, destCountry, province, city, items, 
   const zoneRates = zoneDefinedCodes.size
     ? await getRatesForDestination(shop, departmentSlug, resolvedCity, departmentName, itemTags, rateOpts)
     : [];
-  const defaultRates = await getRatesForDestination(shop, "_default", "", null, itemTags, rateOpts);
+  // Default del PAÍS destino: `_default` solo aplica al país de la tienda;
+  // otros países usan su propio `_default_{cc}` (sin fuga de tarifas entre países).
+  const defaultSlug = defaultZoneSlugFor(destCountry, shopMeta.country);
+  const defaultRates = await getRatesForDestination(shop, defaultSlug, "", null, itemTags, rateOpts);
   const defaultFillIn = defaultRates.filter((r) => !zoneDefinedCodes.has(r.serviceCode));
   const matchingRates = [...zoneRates, ...defaultFillIn];
 
