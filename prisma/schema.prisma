@@ -131,7 +131,21 @@ model ShippingRate {
   timeFrom      String?      // "08:00" — hora inicio (Colombia UTC-5), null = sin restricción
   timeTo        String?      // "13:00" — hora fin, null = sin restricción
   daysOfWeek    String       @default("[]") // JSON array: '["mon","tue","wed","thu","fri"]', [] = todos
-  productCondition String     @default("all")   // "all" | "include_tags" | "exclude_tags"
+  // Condición de producto generalizada:
+  //  - productCondition: "all" | "include" | "exclude". Los valores legacy
+  //    "include_tags"/"exclude_tags" siguen siendo válidos en runtime y
+  //    equivalen a include/exclude con productField="tags".
+  //  - productField: atributo del item contra el que se comparan los valores.
+  //    "tags" | "vendor" | "product_type" | "collection" | "sku".
+  //    vendor y sku vienen en el payload del carrier; tags/product_type/
+  //    collection se consultan a la Admin API solo si alguna rate los usa.
+  //  - productMatchMode: "any" = basta un item que matchee; "all" = todos los
+  //    items del carrito deben matchear (ej. carrito 100% congelados).
+  //  - productTags: JSON array de valores (nombre histórico — hoy guarda tags,
+  //    vendors, tipos, handles/títulos de colección o SKUs según productField).
+  productCondition String     @default("all")
+  productField     String     @default("tags")
+  productMatchMode String     @default("any")
   productTags      String     @default("[]")    // JSON array: '["fragil","pesado"]'
   // Estimado de entrega en días calendario. Si ambos son null no se envía
   // estimado. En checkout se convierten a min/max_delivery_date (hoy + N días)

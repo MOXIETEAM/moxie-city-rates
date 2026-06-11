@@ -19,63 +19,33 @@
 
 import { quoteShipping } from "../rate-engine.server";
 import { debug, info, error as logError } from "../utils/logger.server";
-import { unauthenticated } from "../shopify.server";
-import prisma from "../db.server";
 import { verifyCarrierServiceCallbackHmac } from "../utils/shopify-hmac.server";
 import { consume, getClientIp } from "../utils/rate-limit.server";
 import { toCarrierTotalPrice } from "../utils/geo";
 import { getShopMeta } from "../utils/shop-record.server";
 import { createQuoteTrace, saveQuote } from "../utils/quote-log.server";
+import {
+  getProductConditionFields,
+  fieldsNeedApiFetch,
+  fetchProductInfoMap,
+  buildCartProducts,
+} from "../utils/product-info.server";
 
 /**
- * Verifica si hay rates con condiciones de producto activas para esta tienda.
- * Solo si las hay, vale la pena hacer el fetch de tags (evita latencia innecesaria).
+ * Arma cartProducts solo si la tienda tiene rates con condición de producto.
+ * vendor/sku salen del payload gratis; tags/tipo/colección piden Admin API
+ * únicamente cuando alguna rate filtra por esos campos.
  */
-async function shopHasProductRates(shop) {
-  const count = await prisma.shippingRate.count({
-    where: {
-      zone: { shop },
-      enabled: true,
-      productCondition: { not: "all" },
-    },
-  });
-  return count > 0;
-}
+async function resolveCartProducts(shop, items) {
+  const fields = await getProductConditionFields(shop);
+  if (!fields.size) return null;
 
-/**
- * Obtiene los tags de productos del carrito via Admin API.
- * Usa unauthenticated.admin() para acceder sin sesión OAuth activa.
- * Retorna un array de tags únicos (lowercase).
- */
-async function fetchCartProductTags(shop, items) {
-  try {
-    const productIds = [...new Set(items.map((i) => i.product_id).filter(Boolean))];
-    if (!productIds.length) return [];
-
-    const { admin } = await unauthenticated.admin(shop);
-
-    const gids = productIds.map((id) => `"gid://shopify/Product/${id}"`);
-    const query = `query { nodes(ids: [${gids.join(",")}]) { ... on Product { id tags } } }`;
-
-    const res = await admin.graphql(query);
-    const data = await res.json();
-    const nodes = data.data?.nodes || [];
-
-    const allTags = new Set();
-    for (const node of nodes) {
-      if (node?.tags) {
-        for (const tag of node.tags) {
-          allTags.add(tag.toLowerCase().trim());
-        }
-      }
-    }
-
-    debug(`[carrier-service] Fetched tags for ${productIds.length} product(s): [${[...allTags].join(", ")}]`);
-    return [...allTags];
-  } catch (err) {
-    debug(`[carrier-service] Error fetching product tags: ${err.message}`);
-    return [];
+  let infoMap = {};
+  if (fieldsNeedApiFetch(fields)) {
+    const productIds = items.map((i) => i.product_id).filter(Boolean);
+    infoMap = await fetchProductInfoMap(shop, productIds);
   }
+  return buildCartProducts(items, infoMap);
 }
 
 /**
@@ -174,11 +144,7 @@ export const action = async ({ request }) => {
       debug(`[carrier-service]   item: ${item.name || item.title || "?"} | _mox_service_code=${code} | price=${item.price} ${shopCurrency}`);
     }
 
-    let itemTags = null;
-    const hasProductRates = await shopHasProductRates(shop);
-    if (hasProductRates) {
-      itemTags = await fetchCartProductTags(shop, items);
-    }
+    const cartProducts = await resolveCartProducts(shop, items);
 
     const trace = createQuoteTrace();
     const result = await quoteShipping({
@@ -188,7 +154,7 @@ export const action = async ({ request }) => {
       city: city || "",
       items,
       shopMeta,
-      itemTags,
+      cartProducts,
       trace,
     });
 
@@ -211,12 +177,22 @@ export const action = async ({ request }) => {
       debug(`[carrier-service] Pickup dept mismatch: carrito tiene pickup en "${pickupMismatchDept}" pero destino es "${departmentName}" → 0 rates`);
     }
 
+    // Varias ofertas pueden compartir serviceCode (ej. dos rates mox_envio con
+    // nombres distintos) — Shopify necesita service_code único por rate en la
+    // respuesta, así que se sufijan los repetidos (_2, _3...).
+    const seenCodes = new Map();
+    const uniqueServiceCode = (code) => {
+      const n = (seenCodes.get(code) || 0) + 1;
+      seenCodes.set(code, n);
+      return n === 1 ? code : `${code}_${n}`;
+    };
+
     const rates = finalRates
       .map((entry) => {
         if (entry.rate) {
           return {
             service_name: entry.rate.name,
-            service_code: entry.rate.serviceCode,
+            service_code: uniqueServiceCode(entry.rate.serviceCode),
             total_price: toCarrierTotalPrice(entry.price),
             currency: shopCurrency,
             description: entry.rate.description || "",
@@ -225,7 +201,7 @@ export const action = async ({ request }) => {
         }
         return {
           service_name: entry.name,
-          service_code: entry.serviceCode,
+          service_code: uniqueServiceCode(entry.serviceCode),
           total_price: toCarrierTotalPrice(entry.price),
           currency: shopCurrency,
           description: entry.description || "",

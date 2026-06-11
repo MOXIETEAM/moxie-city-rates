@@ -173,7 +173,28 @@
     "delivery_days_single": "Entrega: {{n}} día(s)",
     "delivery_days_range": "Entrega: {{min}}–{{max}} días",
     "duplicate": "Duplicar",
-    "copy_suffix": " (copia)"
+    "copy_suffix": " (copia)",
+    "product_include": "Solo si el carrito matchea",
+    "product_exclude": "Excluir si el carrito matchea",
+    "product_field": "Comparar por",
+    "field_tags": "Tags",
+    "field_vendor": "Vendor (marca)",
+    "field_product_type": "Tipo de producto",
+    "field_collection": "Colección",
+    "field_sku": "SKU",
+    "product_match_mode": "Cómo matchear",
+    "match_any": "Algún item del carrito",
+    "match_all": "Todos los items del carrito",
+    "match_all_short": "todos los items",
+    "product_values_label": "Valores (separados por coma)",
+    "product_values_placeholder_tags": "fragil, pesado",
+    "product_values_placeholder_vendor": "Nike, Adidas",
+    "product_values_placeholder_product_type": "Camisetas, Zapatos",
+    "product_values_placeholder_collection": "congelados, ofertas-verano",
+    "product_values_placeholder_sku": "SKU-001, SKU-002",
+    "collection_hint": "Acepta handle o título de la colección (sin distinguir mayúsculas).",
+    "product_include_label": "Solo",
+    "product_exclude_label": "Excluye"
   },
   "action": {
     "zone_created": "Zona \"{{dept}}\" creada y sincronizada",
@@ -297,6 +318,7 @@
     "reason_product_include": "Sin tag de producto requerido",
     "reason_product_exclude": "Tag de producto excluido",
     "reason_schedule": "Fuera de horario",
-    "reason_zone_overrides_default": "Cubierta por la zona del destino"
+    "reason_zone_overrides_default": "Cubierta por la zona del destino",
+    "sim_product_attrs": "Atributos del producto de prueba (vendor, SKU, tipo, colección)"
   }
 }

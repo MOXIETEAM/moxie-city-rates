@@ -173,7 +173,28 @@
     "delivery_days_single": "Delivery: {{n}} day(s)",
     "delivery_days_range": "Delivery: {{min}}–{{max}} days",
     "duplicate": "Duplicate",
-    "copy_suffix": " (copy)"
+    "copy_suffix": " (copy)",
+    "product_include": "Only if cart matches",
+    "product_exclude": "Exclude if cart matches",
+    "product_field": "Match by",
+    "field_tags": "Tags",
+    "field_vendor": "Vendor (brand)",
+    "field_product_type": "Product type",
+    "field_collection": "Collection",
+    "field_sku": "SKU",
+    "product_match_mode": "Match mode",
+    "match_any": "Any cart item",
+    "match_all": "Every cart item",
+    "match_all_short": "all items",
+    "product_values_label": "Values (comma separated)",
+    "product_values_placeholder_tags": "fragile, heavy",
+    "product_values_placeholder_vendor": "Nike, Adidas",
+    "product_values_placeholder_product_type": "Shirts, Shoes",
+    "product_values_placeholder_collection": "frozen, summer-sale",
+    "product_values_placeholder_sku": "SKU-001, SKU-002",
+    "collection_hint": "Accepts collection handle or title (case-insensitive).",
+    "product_include_label": "Only",
+    "product_exclude_label": "Excludes"
   },
   "action": {
     "zone_created": "Zone \"{{dept}}\" created and synced",
@@ -297,6 +318,7 @@
     "reason_product_include": "Missing required product tag",
     "reason_product_exclude": "Excluded product tag in cart",
     "reason_schedule": "Outside schedule",
-    "reason_zone_overrides_default": "Covered by destination zone"
+    "reason_zone_overrides_default": "Covered by destination zone",
+    "sim_product_attrs": "Test product attributes (vendor, SKU, type, collection)"
   }
 }

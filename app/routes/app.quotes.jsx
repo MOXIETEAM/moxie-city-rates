@@ -78,6 +78,14 @@ export const action = async ({ request }) => {
       .split(",")
       .map((s) => s.trim().toLowerCase())
       .filter(Boolean);
+    const vendor = String(formData.get("vendor") || "").trim();
+    const sku = String(formData.get("sku") || "").trim();
+    const productType = String(formData.get("product_type") || "").trim();
+    const collectionsRaw = String(formData.get("collections") || "");
+    const collections = collectionsRaw
+      .split(",")
+      .map((s) => s.trim())
+      .filter(Boolean);
 
     if (!province) return { error: t("quotes.sim_province_required") };
 
@@ -93,6 +101,10 @@ export const action = async ({ request }) => {
       },
     ];
 
+    // Un cartProduct por el item sintético, con los atributos que el merchant
+    // escribió — mismo formato que arma el carrier service en checkout real.
+    const cartProducts = [{ sku, vendor, productType, tags: itemTags, collections }];
+
     const trace = createQuoteTrace();
     const result = await quoteShipping({
       shop: session.shop,
@@ -101,7 +113,7 @@ export const action = async ({ request }) => {
       city,
       items,
       shopMeta,
-      itemTags,
+      cartProducts,
       trace,
     });
 
@@ -304,6 +316,18 @@ function Simulator({ t, countries, subdivisionsByCountry, shopCountry, shopCurre
               {t("quotes.sim_run")}
             </s-button>
           </s-stack>
+
+          <details style={{ marginTop: 8 }}>
+            <summary style={{ cursor: "pointer", fontSize: 13, color: "#666" }}>
+              {t("quotes.sim_product_attrs")}
+            </summary>
+            <s-stack direction="inline" gap="base" style={{ flexWrap: "wrap", marginTop: 8 }}>
+              <s-text-field label={t("shipping.field_vendor")} name="vendor" style={{ minWidth: 140 }} />
+              <s-text-field label={t("shipping.field_sku")} name="sku" style={{ minWidth: 140 }} />
+              <s-text-field label={t("shipping.field_product_type")} name="product_type" style={{ minWidth: 140 }} />
+              <s-text-field label={t("shipping.field_collection")} name="collections" placeholder="handle-o-titulo, otra" style={{ minWidth: 180 }} />
+            </s-stack>
+          </details>
         </fetcher.Form>
 
         {fetcher.data?.error && (

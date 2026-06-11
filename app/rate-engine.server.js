@@ -154,20 +154,28 @@ export function pickBestRate(rates, cartWeightKg, cartTotal) {
   return best;
 }
 
+/** Llave de oferta: mismo serviceCode + mismo nombre = misma oferta. */
+function rateOfferKey(rate) {
+  return `${rate.serviceCode}::${String(rate.name || "").trim().toLowerCase()}`;
+}
+
 /**
- * De un array de rates (posiblemente con serviceCodes repetidos),
- * retorna la mejor tarifa por serviceCode.
+ * De un array de rates, retorna la mejor tarifa por OFERTA (serviceCode +
+ * nombre). Reglas con el mismo nombre son variantes de precio de la misma
+ * oferta (ej. por ciudad) → gana la más barata. Reglas con nombres distintos
+ * son ofertas distintas → todas se muestran y el cliente elige en checkout.
  */
 export function deduplicateBestRates(rates, cartWeightKg, cartTotal) {
-  const byCode = {};
+  const byKey = {};
   for (const rate of rates) {
-    if (!byCode[rate.serviceCode]) byCode[rate.serviceCode] = [];
-    byCode[rate.serviceCode].push(rate);
+    const key = rateOfferKey(rate);
+    if (!byKey[key]) byKey[key] = [];
+    byKey[key].push(rate);
   }
 
   const result = [];
-  for (const code in byCode) {
-    const best = pickBestRate(byCode[code], cartWeightKg, cartTotal);
+  for (const key in byKey) {
+    const best = pickBestRate(byKey[key], cartWeightKg, cartTotal);
     if (best) result.push(best);
   }
   return result;
@@ -250,9 +258,9 @@ export function buildCombinedRate(items, allRates, cartWeightKg, cartTotal) {
 function annotateSelection(trace, matchingRates, finalCodes, cartWeightKg, cartTotal) {
   if (!trace) return;
 
-  const winnersByCode = {};
+  const winnersByKey = {};
   for (const entry of deduplicateBestRates(matchingRates, cartWeightKg, cartTotal)) {
-    winnersByCode[entry.rate.serviceCode] = entry;
+    winnersByKey[rateOfferKey(entry.rate)] = entry;
   }
 
   const byId = new Map(trace.rules.map((r) => [r.rateId, r]));
@@ -267,7 +275,7 @@ function annotateSelection(trace, matchingRates, finalCodes, cartWeightKg, cartT
     }
     ruleTrace.price = price;
 
-    const winner = winnersByCode[rate.serviceCode];
+    const winner = winnersByKey[rateOfferKey(rate)];
     if (winner && winner.rate.id === rate.id) {
       ruleTrace.reason = finalCodes.has(rate.serviceCode) ? "selected" : "method_not_selected";
     } else {
@@ -286,7 +294,10 @@ function annotateSelection(trace, matchingRates, finalCodes, cartWeightKg, cartT
  * @param {string} params.city — ciudad cruda digitada por el cliente
  * @param {Array}  params.items — items del carrito (formato carrier service)
  * @param {object} params.shopMeta — { currency, ianaTimezone, country, cityMatchThreshold }
- * @param {string[]|null} [params.itemTags] — tags de productos del carrito (null = sin filtro)
+ * @param {string[]|null} [params.itemTags] — tags de productos del carrito (legacy, null = sin filtro)
+ * @param {Array|null} [params.cartProducts] — un objeto por item del carrito
+ *        ({ sku, vendor, productType, tags, collections }) para condiciones de
+ *        producto generalizadas. Tiene prioridad sobre itemTags.
  * @param {object|null} [params.trace] — colector de createQuoteTrace()
  *
  * @returns {Promise<{
@@ -297,7 +308,7 @@ function annotateSelection(trace, matchingRates, finalCodes, cartWeightKg, cartT
  *   pickupMismatchDept: string|null,
  * }>}
  */
-export async function quoteShipping({ shop, destCountry, province, city, items, shopMeta, itemTags = null, trace = null }) {
+export async function quoteShipping({ shop, destCountry, province, city, items, shopMeta, itemTags = null, cartProducts = null, trace = null }) {
   const departmentSlug = provinceToSlug(destCountry, province);
   const departmentName = provinceDisplayName(destCountry, province);
 
@@ -332,7 +343,7 @@ export async function quoteShipping({ shop, destCountry, province, city, items, 
   //   - Si la zona NO define un serviceCode → _default lo cubre (fill-in por código).
   //   - Si no hay zona para el depto → todo viene de _default.
   const zoneDefinedCodes = await getZoneDefinedServiceCodes(shop, departmentSlug);
-  const rateOpts = { country: destCountry, timezone: shopMeta.ianaTimezone, threshold: shopMeta.cityMatchThreshold, trace };
+  const rateOpts = { country: destCountry, timezone: shopMeta.ianaTimezone, threshold: shopMeta.cityMatchThreshold, cartProducts, trace };
   const zoneRates = zoneDefinedCodes.size
     ? await getRatesForDestination(shop, departmentSlug, resolvedCity, departmentName, itemTags, rateOpts)
     : [];

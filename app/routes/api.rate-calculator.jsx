@@ -14,14 +14,17 @@
  */
 
 import { getRatesForDestination, resolveCity, getZoneDefinedServiceCodes } from "../mox-shipping-rules.server";
-import { unauthenticated } from "../shopify.server";
 import { debug } from "../utils/logger.server";
 import { checkLimit, getShopPlanForStorefront } from "../utils/billing.server";
-import prisma from "../db.server";
 import { verifyAppProxyOrUnauthorized } from "../utils/app-proxy-auth.server";
 import { consume, getClientIp, rateLimitedResponse } from "../utils/rate-limit.server";
 import { provinceToSlug, provinceDisplayName, formatMoney } from "../utils/geo";
 import { getShopMeta } from "../utils/shop-record.server";
+import {
+  getProductConditionFields,
+  fieldsNeedApiFetch,
+  fetchProductInfoMap,
+} from "../utils/product-info.server";
 
 
 function resolveRatePrice(rate, weightKg, cartTotal) {
@@ -51,34 +54,31 @@ function resolveRatePrice(rate, weightKg, cartTotal) {
   return rate.price;
 }
 
-async function fetchProductTags(shop, productIds) {
-  if (!productIds.length) return null;
+/**
+ * cartProducts para condiciones de producto, a partir de product_ids del
+ * storefront. Limitación: el widget no manda SKU de variante — condiciones por
+ * SKU no matchean en la calculadora (sí en checkout, donde el payload lo trae).
+ */
+async function fetchCartProductsForCalc(shop, productIds) {
+  if (!productIds?.length) return null;
 
-  const hasTagRates = await prisma.shippingRate.count({
-    where: { zone: { shop }, enabled: true, productCondition: { not: "all" } },
-  });
-  if (!hasTagRates) return null;
+  const fields = await getProductConditionFields(shop);
+  if (!fields.size) return null;
 
-  try {
-    const { admin } = await unauthenticated.admin(shop);
-    const gids = productIds.map((id) => `"gid://shopify/Product/${id}"`);
-    const query = `query { nodes(ids: [${gids.join(",")}]) { ... on Product { id tags } } }`;
-    const res = await admin.graphql(query);
-    const data = await res.json();
-    const nodes = data.data?.nodes || [];
-
-    const allTags = new Set();
-    for (const node of nodes) {
-      if (node?.tags) {
-        for (const tag of node.tags) allTags.add(tag.toLowerCase().trim());
-      }
-    }
-    debug(`[rate-calc] Tags for ${productIds.length} product(s): [${[...allTags].join(", ")}]`);
-    return [...allTags];
-  } catch (err) {
-    debug(`[rate-calc] Error fetching product tags: ${err.message}`);
-    return null;
+  let infoMap = {};
+  if (fieldsNeedApiFetch(fields) || fields.has("vendor")) {
+    infoMap = await fetchProductInfoMap(shop, productIds);
   }
+  return productIds.map((id) => {
+    const info = infoMap[String(id)] || {};
+    return {
+      sku: "",
+      vendor: info.vendor || "",
+      productType: info.productType || "",
+      tags: info.tags || [],
+      collections: info.collections || [],
+    };
+  });
 }
 
 const CORS_HEADERS = {
@@ -127,25 +127,28 @@ async function calculateRates({ shop, province, city, country, weightKg, cartTot
 
   debug(`[rate-calc] ${shop} | ${destCountry} ${province} → ${departmentSlug} | city: "${city}" → "${resolvedCity}" | weight: ${weightKg}kg | total: ${cartTotal} ${shopCurrency}`);
 
-  const itemTags = productIds ? await fetchProductTags(shop, productIds) : null;
+  const cartProducts = productIds ? await fetchCartProductsForCalc(shop, productIds) : null;
 
   // Merge por serviceCode: zona autoritativa para códigos que define,
   // _default llena huecos para códigos no definidos (o todo si no hay zona).
-  const rateOpts = { country: destCountry, timezone: shopMeta.ianaTimezone, threshold: shopMeta.cityMatchThreshold };
+  const rateOpts = { country: destCountry, timezone: shopMeta.ianaTimezone, threshold: shopMeta.cityMatchThreshold, cartProducts };
   const zoneDefinedCodes = await getZoneDefinedServiceCodes(shop, departmentSlug);
   const zoneRates = zoneDefinedCodes.size
-    ? await getRatesForDestination(shop, departmentSlug, resolvedCity, departmentName, itemTags, rateOpts)
+    ? await getRatesForDestination(shop, departmentSlug, resolvedCity, departmentName, null, rateOpts)
     : [];
-  const defaultRates = await getRatesForDestination(shop, "_default", "", null, itemTags, rateOpts);
+  const defaultRates = await getRatesForDestination(shop, "_default", "", null, null, rateOpts);
   const defaultFillIn = defaultRates.filter((r) => !zoneDefinedCodes.has(r.serviceCode));
   const rates = [...zoneRates, ...defaultFillIn];
 
+  // Dedupe por oferta (serviceCode + nombre): mismo nombre = variantes de la
+  // misma oferta (gana la más barata); nombres distintos = opciones separadas.
   const byCode = {};
   for (const rate of rates) {
     const price = resolveRatePrice(rate, weightKg, cartTotal);
     if (price === null) continue;
-    if (!byCode[rate.serviceCode] || price < byCode[rate.serviceCode].price) {
-      byCode[rate.serviceCode] = {
+    const offerKey = `${rate.serviceCode}::${String(rate.name || "").trim().toLowerCase()}`;
+    if (!byCode[offerKey] || price < byCode[offerKey].price) {
+      byCode[offerKey] = {
         name: rate.name,
         service_code: rate.serviceCode,
         price,

@@ -99,6 +99,67 @@ function isWithinSchedule(rate, tz) {
   return true;
 }
 
+// --- Product conditions ---
+
+const lowerTrim = (s) => String(s || "").toLowerCase().trim();
+
+/**
+ * ¿Este item del carrito matchea los valores configurados para el campo?
+ * `item` (cartProduct): { sku, vendor, productType, tags: [], collections: [] }
+ * — collections trae handles y títulos; todo se compara case-insensitive.
+ */
+function itemMatchesProductValues(item, field, values) {
+  switch (field) {
+    case "vendor":
+      return values.includes(lowerTrim(item.vendor));
+    case "sku":
+      return values.includes(lowerTrim(item.sku));
+    case "product_type":
+      return values.includes(lowerTrim(item.productType));
+    case "collection":
+      return (item.collections || []).some((c) => values.includes(lowerTrim(c)));
+    case "tags":
+    default:
+      return (item.tags || []).some((t) => values.includes(lowerTrim(t)));
+  }
+}
+
+/**
+ * Evalúa la condición de producto de una rate contra el carrito.
+ *
+ * @param {object} rate — ShippingRate (productCondition/productField/productMatchMode/productTags)
+ * @param {Array|null} cartProducts — un objeto por item del carrito (ver itemMatchesProductValues)
+ * @param {string[]|null} flatItemTags — fallback legacy: tags del carrito aplanadas (callers viejos)
+ * @returns {{ applies: boolean, matched?: boolean }} applies=false → la rate se descarta.
+ *
+ * Sin datos para evaluar (cartProducts y flatItemTags null) → fail open
+ * (la condición se ignora), igual que el comportamiento histórico cuando el
+ * fetch de tags fallaba.
+ */
+export function evaluateProductCondition(rate, cartProducts, flatItemTags) {
+  if (!rate.productCondition || rate.productCondition === "all") return { applies: true };
+
+  const values = JSON.parse(rate.productTags || "[]").map(lowerTrim).filter(Boolean);
+  if (!values.length) return { applies: true };
+
+  const isInclude = rate.productCondition === "include" || rate.productCondition === "include_tags";
+  const field = rate.productField || "tags";
+  const mode = rate.productMatchMode || "any";
+
+  let matched;
+  if (Array.isArray(cartProducts) && cartProducts.length) {
+    const flags = cartProducts.map((p) => itemMatchesProductValues(p, field, values));
+    matched = mode === "all" ? flags.every(Boolean) : flags.some(Boolean);
+  } else if (flatItemTags && field === "tags") {
+    // Camino legacy: lista plana de tags sin mapeo por item — solo modo "any".
+    matched = values.some((v) => flatItemTags.includes(v));
+  } else {
+    return { applies: true };
+  }
+
+  return { applies: isInclude ? matched : !matched, matched };
+}
+
 // --- GraphQL ---
 
 const METAFIELD_SET_MUTATION = `#graphql
@@ -238,17 +299,20 @@ export async function getRatesForDestination(shop, departmentSlug, city, departm
       }
     }
 
-    if (rate.productCondition !== "all" && normalizedItemTags) {
-      const rateTags = JSON.parse(rate.productTags || "[]").map((t) => t.toLowerCase().trim());
-      const hasMatch = rateTags.some((rt) => normalizedItemTags.includes(rt));
-      if (rate.productCondition === "include_tags" && !hasMatch) {
-        info(`[rates-filter] ${zone.slug}/${rate.name}(${rate.serviceCode}) DROP product include`);
-        traceRule(rate, false, "product_include", `carrito sin tags [${rateTags.join(", ")}]`);
-        return false;
-      }
-      if (rate.productCondition === "exclude_tags" && hasMatch) {
-        info(`[rates-filter] ${zone.slug}/${rate.name}(${rate.serviceCode}) DROP product exclude`);
-        traceRule(rate, false, "product_exclude", `carrito tiene tag excluido de [${rateTags.join(", ")}]`);
+    if (rate.productCondition !== "all") {
+      const res = evaluateProductCondition(rate, opts.cartProducts || null, normalizedItemTags);
+      if (!res.applies) {
+        const isInclude = rate.productCondition === "include" || rate.productCondition === "include_tags";
+        const field = rate.productField || "tags";
+        const mode = rate.productMatchMode || "any";
+        const values = JSON.parse(rate.productTags || "[]");
+        info(`[rates-filter] ${zone.slug}/${rate.name}(${rate.serviceCode}) DROP product ${isInclude ? "include" : "exclude"} field=${field} mode=${mode}`);
+        traceRule(
+          rate,
+          false,
+          isInclude ? "product_include" : "product_exclude",
+          `${field}/${mode}: [${values.join(", ")}]`,
+        );
         return false;
       }
     }
@@ -370,10 +434,26 @@ export async function saveRate({
   weightTiers,
   cartTotalTiers,
   productCondition,
+  productField,
+  productMatchMode,
   productTags,
   minDeliveryDays,
   maxDeliveryDays,
 }) {
+  // Normaliza valores legacy hacia el modelo nuevo al guardar: el runtime
+  // sigue aceptando include_tags/exclude_tags para filas viejas no re-guardadas.
+  let normalizedProductCondition = productCondition || "all";
+  let normalizedProductField = productField || "tags";
+  if (normalizedProductCondition === "include_tags") {
+    normalizedProductCondition = "include";
+    normalizedProductField = "tags";
+  } else if (normalizedProductCondition === "exclude_tags") {
+    normalizedProductCondition = "exclude";
+    normalizedProductField = "tags";
+  }
+  const VALID_FIELDS = new Set(["tags", "vendor", "product_type", "collection", "sku"]);
+  if (!VALID_FIELDS.has(normalizedProductField)) normalizedProductField = "tags";
+  const normalizedMatchMode = productMatchMode === "all" ? "all" : "any";
   // parseFloat (not parseInt): prices are in major currency units and may have
   // minor units for non-zero-decimal currencies (USD 12.99).
   const parsedPrice = parseFloat(price);
@@ -407,7 +487,9 @@ export async function saveRate({
     pricingMode: pricingMode || "flat",
     weightTiers: weightTiers || "[]",
     cartTotalTiers: cartTotalTiers || "[]",
-    productCondition: productCondition || "all",
+    productCondition: normalizedProductCondition,
+    productField: normalizedProductField,
+    productMatchMode: normalizedMatchMode,
     productTags: productTags || "[]",
     minDeliveryDays: minDays,
     maxDeliveryDays: maxDays,
@@ -555,6 +637,8 @@ export async function syncRulesToMetafield(admin, shop) {
 
       if (rate.productCondition !== "all") {
         rule.productCondition = rate.productCondition;
+        rule.productField = rate.productField || "tags";
+        rule.productMatchMode = rate.productMatchMode || "any";
         rule.productTags = JSON.parse(rate.productTags || "[]");
       }
 
