@@ -68,7 +68,10 @@ const VALID_SERVICE_CODES = new Set(["mox_envio", "mox_express", "mox_pickup"]);
 const VALID_CONDITIONS = new Set(["all", "include", "exclude"]);
 const VALID_DAYS = new Set(["mon", "tue", "wed", "thu", "fri", "sat", "sun"]);
 
-const CSV_HEADERS = "departamento,nombre_tarifa,tipo_servicio,precio,condicion_ciudad,ciudades,descripcion,hora_desde,hora_hasta,dias,modo_precio,rangos_peso,rangos_monto,condicion_producto,tags_producto";
+function getCSVHeaders(locale) {
+  if (locale === "en") return "department,rate_name,service_type,price,city_condition,cities,description,from_time,to_time,days,pricing_mode,weight_ranges,cart_ranges,product_condition,product_tags";
+  return "departamento,nombre_tarifa,tipo_servicio,precio,condicion_ciudad,ciudades,descripcion,hora_desde,hora_hasta,dias,modo_precio,rangos_peso,rangos_monto,condicion_producto,tags_producto";
+}
 
 /** Parsea una línea CSV respetando campos entre comillas. */
 function parseCSVLine(line) {
@@ -1425,7 +1428,11 @@ function RateCard({ rate, zoneId, department, t, planInfo, enabledServices }) {
         <deleteFetcher.Form method="post">
           <input type="hidden" name="_intent" value="delete_rate" />
           <input type="hidden" name="rateId" value={rate.id} />
-          <s-button type="submit" variant="tertiary" size="small" tone="critical" loading={isDeleting}>×</s-button>
+          <s-button type="submit" variant="tertiary" size="small" tone="critical" loading={isDeleting}>
+            <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" width="16" height="16" fill="currentColor" aria-hidden="true">
+              <path d="M8 3.994C8 2.893 8.895 2 10 2s2 .893 2 1.994h3.5a.5.5 0 0 1 0 1h-.847l-.799 9.586A2 2 0 0 1 11.861 16H8.139a2 2 0 0 1-1.993-1.42L5.347 4.994H4.5a.5.5 0 0 1 0-1H8Zm1 0h2c0-.549-.449-.994-1-.994s-1 .445-1 .994ZM6.354 4.994l.78 9.349A1 1 0 0 0 8.14 15h3.722a1 1 0 0 0 .997-.657l.78-9.349H6.354Z"/>
+            </svg>
+          </s-button>
         </deleteFetcher.Form>
       </div>
     </div>
@@ -1580,8 +1587,8 @@ function ZoneSection({ zone, t, planInfo }) {
 
 // --- CSV Export ---
 
-function generateCSV(zones) {
-  const lines = [CSV_HEADERS];
+function generateCSV(zones, locale) {
+  const lines = [getCSVHeaders(locale)];
 
   for (const zone of zones) {
     for (const rate of zone.rates) {
@@ -1697,8 +1704,9 @@ export default function ShippingRules() {
       shopify.toast.show(t("billing.limit_feature"), { isError: true });
       return;
     }
-    const csv = generateCSV(zones);
-    downloadCSV(csv, "reglas-envio.csv");
+    const csv = generateCSV(zones, locale);
+    const filename = locale === "en" ? "shipping-rules.csv" : "reglas-envio.csv";
+    downloadCSV(csv, filename);
   }, [zones, csvAllowed, shopify, t]);
 
   const [showAddDefault, setShowAddDefault] = useState(false);
