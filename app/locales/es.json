@@ -171,7 +171,9 @@
     "delivery_max": "Máx (días)",
     "delivery_hint": "Días calendario desde la compra. Shopify muestra el rango de fechas bajo la tarifa en el checkout.",
     "delivery_days_single": "Entrega: {{n}} día(s)",
-    "delivery_days_range": "Entrega: {{min}}–{{max}} días"
+    "delivery_days_range": "Entrega: {{min}}–{{max}} días",
+    "duplicate": "Duplicar",
+    "copy_suffix": " (copia)"
   },
   "action": {
     "zone_created": "Zona \"{{dept}}\" creada y sincronizada",
@@ -185,7 +187,8 @@
     "zone_services_updated": "Servicios de la zona actualizados",
     "zone_services_empty": "Selecciona al menos un servicio para la zona.",
     "select_department": "Selecciona un departamento",
-    "unexpected_error": "Error inesperado"
+    "unexpected_error": "Error inesperado",
+    "rate_duplicated": "Tarifa duplicada"
   },
   "csv": {
     "min_rows": "El CSV debe tener al menos el encabezado y una fila de datos",

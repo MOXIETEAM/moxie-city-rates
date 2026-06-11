@@ -171,7 +171,9 @@
     "delivery_max": "Max (days)",
     "delivery_hint": "Calendar days from purchase. Shopify shows the date range under the rate at checkout.",
     "delivery_days_single": "Delivery: {{n}} day(s)",
-    "delivery_days_range": "Delivery: {{min}}–{{max}} days"
+    "delivery_days_range": "Delivery: {{min}}–{{max}} days",
+    "duplicate": "Duplicate",
+    "copy_suffix": " (copy)"
   },
   "action": {
     "zone_created": "Zone \"{{dept}}\" created and synced",
@@ -185,7 +187,8 @@
     "zone_services_updated": "Zone services updated",
     "zone_services_empty": "Select at least one service for the zone.",
     "select_department": "Select a department",
-    "unexpected_error": "Unexpected error"
+    "unexpected_error": "Unexpected error",
+    "rate_duplicated": "Rate duplicated"
   },
   "csv": {
     "min_rows": "CSV must have at least a header and one data row",

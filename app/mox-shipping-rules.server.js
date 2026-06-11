@@ -434,6 +434,26 @@ export async function saveRate({
   });
 }
 
+/**
+ * Duplica una tarifa dentro de su misma zona, copiando todas las condiciones.
+ * `nameSuffix` se agrega al nombre (ej " (copia)") — el caller lo localiza.
+ */
+export async function duplicateRate(id, shop, nameSuffix) {
+  const rate = await prisma.shippingRate.findFirst({
+    where: { id, zone: { shop } },
+  });
+  if (!rate) throw new Error("Rate not found or unauthorized");
+
+  const { id: _id, createdAt: _c, updatedAt: _u, zoneId, name, ...fields } = rate;
+  return prisma.shippingRate.create({
+    data: {
+      ...fields,
+      name: `${name}${nameSuffix || " (copy)"}`,
+      zone: { connect: { id: zoneId } },
+    },
+  });
+}
+
 export async function deleteRate(id, shop) {
   const rate = await prisma.shippingRate.findFirst({
     where: { id, zone: { shop } },

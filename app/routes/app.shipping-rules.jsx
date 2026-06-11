@@ -9,6 +9,7 @@ import {
   deleteZone,
   saveRate,
   deleteRate,
+  duplicateRate,
   syncRulesToMetafield,
   getOrCreateDefaultZone,
   updateZoneEnabledServices,
@@ -438,6 +439,18 @@ export const action = async ({ request }) => {
       await deleteRate(rateId, session.shop);
       await syncRulesToMetafield(admin, session.shop);
       return { success: true, message: t("action.rate_deleted") };
+    }
+
+    if (intent === "duplicate_rate") {
+      const rateId = formData.get("rateId");
+      const zoneId = formData.get("zoneId");
+      const currentRateCount = await prisma.shippingRate.count({ where: { zoneId } });
+      if (!checkLimit(planInfo, "ratesPerZone", currentRateCount)) {
+        return { error: t("billing.limit_rates", { max: planInfo.limits.maxRatesPerZone }) };
+      }
+      await duplicateRate(rateId, session.shop, t("shipping.copy_suffix"));
+      await syncRulesToMetafield(admin, session.shop);
+      return { success: true, message: t("action.rate_duplicated") };
     }
 
     if (intent === "sync_metafield") {
@@ -1350,6 +1363,8 @@ function RateForm({ rate, zoneId, department, onCancel, t, planLimits, enabledSe
 
 function RateCard({ rate, zoneId, department, t, planInfo, enabledServices }) {
   const deleteFetcher = useFetcher();
+  const duplicateFetcher = useFetcher();
+  const isDuplicating = duplicateFetcher.state !== "idle";
   const currency = useShopCurrency();
   const [editing, setEditing] = useState(false);
   const isDeleting = deleteFetcher.state !== "idle";
@@ -1465,6 +1480,16 @@ function RateCard({ rate, zoneId, department, t, planInfo, enabledServices }) {
       </div>
       <div style={{ display: "flex", gap: "4px", alignItems: "center" }}>
         <s-button variant="tertiary" size="small" onClick={() => setEditing(true)}>{t("shipping.edit")}</s-button>
+        <duplicateFetcher.Form method="post">
+          <input type="hidden" name="_intent" value="duplicate_rate" />
+          <input type="hidden" name="rateId" value={rate.id} />
+          <input type="hidden" name="zoneId" value={zoneId} />
+          <s-button type="submit" variant="tertiary" size="small" loading={isDuplicating} title={t("shipping.duplicate")}>
+            <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" width="16" height="16" fill="currentColor" aria-hidden="true">
+              <path d="M7 4a2 2 0 0 1 2-2h5a2 2 0 0 1 2 2v7a2 2 0 0 1-2 2h-1v1a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V7a2 2 0 0 1 2-2h1V4Zm1 1h3a2 2 0 0 1 2 2v5h1a1 1 0 0 0 1-1V4a1 1 0 0 0-1-1H9a1 1 0 0 0-1 1v1ZM6 6a1 1 0 0 0-1 1v7a1 1 0 0 0 1 1h5a1 1 0 0 0 1-1V7a1 1 0 0 0-1-1H6Z"/>
+            </svg>
+          </s-button>
+        </duplicateFetcher.Form>
         <deleteFetcher.Form method="post">
           <input type="hidden" name="_intent" value="delete_rate" />
           <input type="hidden" name="rateId" value={rate.id} />
