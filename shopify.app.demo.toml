@@ -11,7 +11,7 @@
 client_id = "7d47f8bd8a68b36ee61a6b7e54e3a4c4"
 name = "Delivery Rules Demo"
 handle = "delivery-rules-demo"
-application_url = "https://moxie-city-rates-custom-app.onrender.com"
+application_url = "https://moxie-city-rates-test.onrender.com"
 embedded = true
 
 [build]
@@ -36,8 +36,8 @@ api_version = "2026-04"
 scopes = "read_shipping,write_shipping,read_locations,read_products"
 
 [auth]
-redirect_urls = [ "https://moxie-city-rates-custom-app.onrender.com/api/auth" ]
+redirect_urls = [ "https://moxie-city-rates-test.onrender.com/api/auth" ]
 
 
 [app_preferences]
-url = "https://moxie-city-rates-custom-app.onrender.com/app"
+url = "https://moxie-city-rates-test.onrender.com/app"
