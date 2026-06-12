@@ -7,6 +7,40 @@ import {
 } from "@shopify/shopify-app-react-router/server";
 import { PrismaSessionStorage } from "@shopify/shopify-app-session-storage-prisma";
 import prisma from "./db.server";
+import { warn as logWarn } from "./utils/logger.server";
+
+/**
+ * Session storage tolerante a la carrera del primer load post-install.
+ *
+ * En la primera carga embebida tras instalar no existe sesión todavía: los
+ * loaders padre e hijo corren EN PARALELO, ambos hacen token exchange y ambos
+ * upsertean la MISMA fila Session. En Postgres dos upserts concurrentes del
+ * mismo id pueden chocar con unique constraint (Prisma P2002) → el request
+ * respondía 500 y el merchant veía la app rota hasta refrescar.
+ *
+ * Mitigación: si el insert choca, el otro request ya guardó la misma sesión —
+ * reintentar una vez (ahora toma la rama update del upsert) y si aún falla,
+ * darla por guardada. Nunca degrada datos: ambas escrituras llevan el mismo
+ * token recién emitido.
+ */
+class RaceTolerantSessionStorage extends PrismaSessionStorage {
+  async storeSession(session) {
+    try {
+      return await super.storeSession(session);
+    } catch (err) {
+      const isUniqueViolation =
+        err?.code === "P2002" || /unique constraint/i.test(err?.message || "");
+      if (!isUniqueViolation) throw err;
+      logWarn("[session-storage] upsert race on first install load — retrying once");
+      try {
+        return await super.storeSession(session);
+      } catch {
+        // El otro request ya persistió esta misma sesión.
+        return true;
+      }
+    }
+  }
+}
 import { ensureShopRecord, captureShopMeta } from "./utils/shop-record.server";
 import { ensureFletixCarrierService } from "./utils/carrier-service.server";
 import { syncRulesToMetafield } from "./mox-shipping-rules.server";
@@ -22,7 +56,7 @@ const shopify = shopifyApp({
   scopes: process.env.SCOPES?.split(","),
   appUrl: process.env.SHOPIFY_APP_URL || "",
   authPathPrefix: "/auth",
-  sessionStorage: new PrismaSessionStorage(prisma),
+  sessionStorage: new RaceTolerantSessionStorage(prisma),
   distribution: AppDistribution.AppStore,
   future: {
     expiringOfflineAccessTokens: true,

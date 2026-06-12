@@ -8,6 +8,16 @@ import { error as logError } from "./utils/logger.server";
 
 export const streamTimeout = 5000;
 
+/**
+ * Errores no manejados de loaders/actions a nivel framework. Sin esto, un 500
+ * del framework (ej. fallo en session storage durante el install) muere
+ * silencioso: no pasa por nuestro logger y Sentry nunca se entera.
+ */
+export function handleError(error, { request }) {
+  if (request.signal.aborted) return; // cliente canceló — ruido, no error
+  logError("[entry.server] Unhandled route error:", error);
+}
+
 export default async function handleRequest(
   request,
   responseStatusCode,
