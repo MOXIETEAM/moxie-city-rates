@@ -1775,6 +1775,88 @@ function ZoneSection({ zone, t, planInfo, shopCountry, countryName }) {
 
 // --- CSV Export ---
 
+/**
+ * Plantilla de ejemplo para el merchant: una fila por feature (tarifa fija,
+ * ciudades+horario, rangos de peso, envío gratis por monto, condición de
+ * producto, multi-país). Los datos son neutros; solo el encabezado se traduce.
+ */
+function generateTemplateCSV(locale) {
+  const rows = [
+    'Antioquia,Envío estándar,mox_envio,12000,all,,Entrega en todo el departamento,,,,flat,,,all,,2,4,tags,any,CO',
+    'Antioquia,Envío express,mox_express,20000,include,"MEDELLÍN,ENVIGADO,SABANETA",Solo área metropolitana,08:00,18:00,"mon,tue,wed,thu,fri",flat,,,all,,1,1,tags,any,CO',
+    'Cundinamarca,Envío por peso,mox_envio,0,all,,,,,,weight_tiers,"0-5:10000;5-15:20000",,all,,2,5,tags,any,CO',
+    'Cundinamarca,Gratis desde 200.000,mox_envio,0,all,,,,,,cart_total,,"0-200000:15000;200000-0:0",all,,2,5,tags,any,CO',
+    'Antioquia,Refrigerado,mox_envio,25000,all,,Cadena de frío,,,,flat,,,include,congelados,1,2,collection,all,CO',
+    'Jalisco,Envío MX,mox_envio,150,all,,,,,,flat,,,all,,3,6,tags,any,MX',
+  ];
+  return [getCSVHeaders(locale), ...rows].join("\n");
+}
+
+// Referencia de columnas para la guía del CSV. `desc` es clave i18n; valores y
+// ejemplos son códigos/formatos (no se traducen).
+const CSV_HELP_COLUMNS = [
+  { es: "departamento", en: "department", values: "", example: "Antioquia" },
+  { es: "nombre_tarifa", en: "rate_name", values: "", example: "Envío estándar" },
+  { es: "tipo_servicio", en: "service_type", values: "mox_envio | mox_express | mox_pickup", example: "mox_envio" },
+  { es: "precio", en: "price", values: "", example: "12000" },
+  { es: "condicion_ciudad", en: "city_condition", values: "all | include | exclude", example: "include" },
+  { es: "ciudades", en: "cities", values: "", example: '"MEDELLÍN,ENVIGADO"' },
+  { es: "descripcion", en: "description", values: "", example: "Entrega 24h" },
+  { es: "hora_desde / hora_hasta", en: "from_time / to_time", values: "HH:MM", example: "08:00 / 18:00" },
+  { es: "dias", en: "days", values: "mon…sun", example: '"mon,tue,wed,thu,fri"' },
+  { es: "modo_precio", en: "pricing_mode", values: "flat | weight_tiers | cart_total", example: "flat" },
+  { es: "rangos_peso", en: "weight_ranges", values: "minKg-maxKg:precio;…", example: '"0-5:10000;5-15:20000"' },
+  { es: "rangos_monto", en: "cart_ranges", values: "min-max:precio;… (max 0 = sin tope)", example: '"0-200000:15000;200000-0:0"' },
+  { es: "condicion_producto", en: "product_condition", values: "all | include | exclude", example: "include" },
+  { es: "tags_producto", en: "product_tags", values: "", example: "congelados" },
+  { es: "entrega_min_dias / entrega_max_dias", en: "delivery_min/max_days", values: "", example: "2 / 4" },
+  { es: "campo_producto", en: "product_field", values: "tags | vendor | product_type | collection | sku", example: "collection" },
+  { es: "modo_producto", en: "product_match_mode", values: "any | all", example: "any" },
+  { es: "pais", en: "country", values: "ISO-2", example: "CO, MX, BR…" },
+];
+
+function CsvHelp({ t, locale }) {
+  return (
+    <details style={{ border: "1px solid #e3e3e3", borderRadius: 10, padding: "10px 14px", background: "#fafafa" }}>
+      <summary style={{ cursor: "pointer", fontSize: 13, fontWeight: 600 }}>
+        {t("shipping.csv_help_title")}
+      </summary>
+      <div style={{ marginTop: 10, fontSize: 12.5 }}>
+        <p style={{ margin: "0 0 8px", color: "#555" }}>{t("shipping.csv_help_intro")}</p>
+        <ul style={{ margin: "0 0 10px 16px", padding: 0, color: "#555" }}>
+          <li>{t("shipping.csv_help_tip_quotes")}</li>
+          <li>{t("shipping.csv_help_tip_empty")}</li>
+          <li>{t("shipping.csv_help_tip_values_field")}</li>
+        </ul>
+        <div style={{ overflowX: "auto" }}>
+          <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12 }}>
+            <thead>
+              <tr style={{ textAlign: "left", borderBottom: "1px solid #ddd" }}>
+                <th style={{ padding: "4px 8px" }}>{t("shipping.csv_help_col")}</th>
+                <th style={{ padding: "4px 8px" }}>{t("shipping.csv_help_desc_col")}</th>
+                <th style={{ padding: "4px 8px" }}>{t("shipping.csv_help_values")}</th>
+                <th style={{ padding: "4px 8px" }}>{t("shipping.csv_help_example")}</th>
+              </tr>
+            </thead>
+            <tbody>
+              {CSV_HELP_COLUMNS.map((c, i) => (
+                <tr key={i} style={{ borderBottom: "1px solid #efefef", verticalAlign: "top" }}>
+                  <td style={{ padding: "4px 8px", fontFamily: "monospace", whiteSpace: "nowrap" }}>
+                    {locale === "en" ? c.en : c.es}
+                  </td>
+                  <td style={{ padding: "4px 8px", color: "#555" }}>{t(`shipping.csv_col_${i}`)}</td>
+                  <td style={{ padding: "4px 8px", fontFamily: "monospace" }}>{c.values}</td>
+                  <td style={{ padding: "4px 8px", fontFamily: "monospace" }}>{c.example}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </details>
+  );
+}
+
 /** Campo de texto libre → CSV seguro: encomilla si trae coma/comilla/salto. */
 function csvField(value) {
   const s = String(value ?? "");
@@ -2263,7 +2345,14 @@ export default function ShippingRules() {
               <s-button variant="secondary" disabled={!csvAllowed} onClick={handleExport}>
                 {t("shipping.csv_export")}
               </s-button>
+              <s-button
+                variant="tertiary"
+                onClick={() => downloadCSV(generateTemplateCSV(locale), locale === "en" ? "template-shipping-rules.csv" : "plantilla-reglas-envio.csv")}
+              >
+                {t("shipping.csv_template")}
+              </s-button>
             </s-stack>
+            <CsvHelp t={t} locale={locale} />
             {csvFetcher.data?.importResults?.errors?.length > 0 && (
               <div style={{
                 padding: "12px", borderRadius: "8px",
