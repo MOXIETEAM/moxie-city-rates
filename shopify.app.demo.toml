@@ -9,8 +9,8 @@
 # Dev:    shopify app dev --config=demo
 
 client_id = "7d47f8bd8a68b36ee61a6b7e54e3a4c4"
-name = "City Rates Demo"
-handle = "city-rates-demo"
+name = "Delivery Rules Demo"
+handle = "delivery-rules-demo"
 application_url = "https://moxie-city-rates-custom-app.onrender.com"
 embedded = true
 

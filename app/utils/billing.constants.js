@@ -18,7 +18,9 @@ const APP_VARIANT =
   (typeof process !== "undefined" && process.env?.APP_VARIANT) ||
   "";
 
-const isCityRates = APP_VARIANT === "cityrates";
+import { isDeliveryRules } from "./variant";
+
+const isCityRates = isDeliveryRules(APP_VARIANT);
 
 export const PLAN_FREE = isCityRates ? "Free" : "Fletix Free";
 export const PLAN_PRO = isCityRates ? "Pro" : "Fletix Pro";

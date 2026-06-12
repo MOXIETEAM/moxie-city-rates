@@ -1,10 +1,10 @@
 # Learn more about configuring your app at https://shopify.dev/docs/apps/tools/cli/configuration
 
 client_id = "8c228546203c5dd03577b1b608bd1075"
-name = "City Rates Custom"
+name = "Delivery Rules Custom"
 application_url = "https://moxie-city-rates-test.onrender.com"
 embedded = true
-handle = "city-rates-custom"
+handle = "delivery-rules-custom"
 
 [build]
 automatically_update_urls_on_dev = true

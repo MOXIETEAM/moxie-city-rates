@@ -1,13 +1,15 @@
+import { isDeliveryRules } from "./variant";
+
 /**
  * Brand resolution for public legal/support pages.
  * Driven by APP_VARIANT env so the same repo can serve both Fletix (private)
- * and City Rates Custom (public App Store) deployments.
+ * and Delivery Rules (public App Store) deployments.
  */
 
 export function getLegalBrand() {
-  const isCityRates = process.env.APP_VARIANT === "cityrates";
+  const isCityRates = isDeliveryRules(process.env.APP_VARIANT);
   return {
-    appName: isCityRates ? "City Rates" : "Fletix",
+    appName: isCityRates ? "Delivery Rules" : "Fletix",
     company: "Moxie",
     contactEmail: "info@moxiedigital.co",
     website: "https://moxiedigital.co",

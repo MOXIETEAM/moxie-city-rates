@@ -1,10 +1,10 @@
+import { isDeliveryRules } from "../utils/variant";
 import { useLoaderData } from "react-router";
 import { login } from "../shopify.server";
 
 function getBrand() {
-  const variant = process.env.APP_VARIANT === "cityrates" ? "cityrates" : "fletix";
-  return variant === "cityrates"
-    ? { name: "City Rates", initial: "C" }
+  return isDeliveryRules(process.env.APP_VARIANT)
+    ? { name: "Delivery Rules", initial: "D" }
     : { name: "Fletix", initial: "F" };
 }
 

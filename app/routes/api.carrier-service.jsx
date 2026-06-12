@@ -1,3 +1,4 @@
+import { isDeliveryRules } from "../utils/variant";
 /**
  * Carrier Service Callback — POST endpoint que Shopify llama durante el checkout.
  *
@@ -245,6 +246,6 @@ export const action = async ({ request }) => {
 
 // GET para health check
 export const loader = async () => {
-  const variant = process.env.APP_VARIANT === "cityrates" ? "cityrates" : "fletix";
+  const variant = isDeliveryRules(process.env.APP_VARIANT) ? "deliveryrules" : "fletix";
   return Response.json({ status: "ok", service: `${variant}-carrier-service` });
 };

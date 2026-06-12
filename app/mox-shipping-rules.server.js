@@ -1,3 +1,4 @@
+import { isDeliveryRules } from "./utils/variant";
 /**
  * Lógica compartida para reglas de envío por municipio.
  * Usado por:
@@ -638,7 +639,7 @@ const METAFIELD_KEY = "shipping_rules";
  */
 async function ensureFletixMetafieldDefinition(admin) {
   const brandName =
-    process.env.APP_VARIANT === "cityrates" ? "City Rates" : "Fletix";
+    isDeliveryRules(process.env.APP_VARIANT) ? "Delivery Rules" : "Fletix";
   try {
     const res = await admin.graphql(METAFIELD_DEFINITION_CREATE_MUTATION, {
       variables: {

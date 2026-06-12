@@ -52,7 +52,7 @@ cd mox-parcelify
 cp .env.example .env       # completar SHOPIFY_API_KEY/SECRET desde Partner Dashboard
 npm install
 npm run setup              # prisma generate + migrate
-npm run dev --config shopify.app.fletix.toml
+npm run dev            # usa --config=custom; también dev:public / dev:demo
 ```
 
 Seguí el link de "Install your app" que imprime la CLI para instalar Fletix en tu dev store.
@@ -90,7 +90,7 @@ mox-parcelify/
 │   ├── fletix-checkout-validation/   Shopify Function (bloqueo en checkout)
 │   └── fletix-rate-calculator/       Theme app extension (calculadora storefront)
 ├── prisma/                           Schema y migraciones
-└── shopify.app.fletix.toml           Config del app linkeada a Partners
+└── shopify.app.{public,custom,demo}.toml  Configs linkeadas a Partners
 ```
 
 ## Para merchants

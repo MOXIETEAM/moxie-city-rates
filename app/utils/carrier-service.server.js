@@ -1,3 +1,4 @@
+import { isDeliveryRules } from "./variant";
 /**
  * Fletix Carrier Service registration.
  *
@@ -16,7 +17,12 @@ import { debug, error as logError, warn } from "./logger.server";
 
 export const CARRIER_NAME =
   process.env.CARRIER_NAME ||
-  (process.env.APP_VARIANT === "cityrates" ? "City Rates" : "Fletix");
+  (isDeliveryRules(process.env.APP_VARIANT) ? "Delivery Rules" : "Fletix");
+
+// Nombres históricos del carrier en tiendas ya instaladas. El matching debe
+// reconocerlos para RENOMBRAR el carrier existente in-place en vez de crear
+// uno duplicado (dos carriers activos = tarifas dobles en checkout).
+const LEGACY_CARRIER_NAMES = new Set(["City Rates", "Fletix"]);
 
 function buildCallbackUrl(shopDomain) {
   const appUrl = process.env.SHOPIFY_APP_URL || process.env.HOST;
@@ -135,17 +141,24 @@ export async function ensureFletixCarrierService(admin, shopDomain) {
     };
 
     // Prefer OUR carrier (callbackUrl on our app host) over a same-named one
-    // from another app, so we don't keep churning a foreign record.
+    // from another app, so we don't keep churning a foreign record. Carriers
+    // con nombre legacy ("City Rates"/"Fletix") y NUESTRO callbackUrl también
+    // matchean — se renombran in-place al nombre actual en el update.
     const appBase = (process.env.SHOPIFY_APP_URL || process.env.HOST || "").replace(/\/$/, "");
+    const isOurs = (c) =>
+      c.callbackUrl === callbackUrl || (appBase && (c.callbackUrl || "").startsWith(appBase));
     const named = existing.filter((c) => c.name === CARRIER_NAME);
+    const legacyOurs = existing.filter(
+      (c) => c.name !== CARRIER_NAME && LEGACY_CARRIER_NAMES.has(c.name) && isOurs(c),
+    );
     const fletix =
-      named.find((c) => c.callbackUrl === callbackUrl) ||
-      (appBase && named.find((c) => (c.callbackUrl || "").startsWith(appBase))) ||
+      named.find((c) => isOurs(c)) ||
+      legacyOurs[0] ||
       named[0];
 
     if (fletix) {
       // Skip update if config already current — avoids extra mutation on every login.
-      if (fletix.callbackUrl === callbackUrl && fletix.active !== false) {
+      if (fletix.name === CARRIER_NAME && fletix.callbackUrl === callbackUrl && fletix.active !== false) {
         debug(`[carrier-service] ${shopDomain} carrier already current (${fletix.id})`);
         return { status: "skipped", id: fletix.id };
       }
@@ -157,7 +170,7 @@ export async function ensureFletixCarrierService(admin, shopDomain) {
             userErrors { field message }
           }
         }`,
-        { variables: { input: { id: fletix.id, callbackUrl, active: true } } },
+        { variables: { input: { id: fletix.id, name: CARRIER_NAME, callbackUrl, active: true } } },
       );
       const updateJson = await updateRes.json();
       const errs = updateJson.data?.carrierServiceUpdate?.userErrors || [];
