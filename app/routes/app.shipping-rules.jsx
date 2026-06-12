@@ -108,7 +108,13 @@ function parseCSVContent(csvText, t) {
   }
 
   const firstLine = parseCSVLine(lines[0]).map((h) => h.toLowerCase().trim());
-  const isHeader = firstLine.includes("departamento") || firstLine.includes("nombre_tarifa");
+  // Reconoce el encabezado en ambos idiomas — el export puede venir de
+  // cualquiera de los dos locales y debe poder re-importarse.
+  const isHeader =
+    firstLine.includes("departamento") ||
+    firstLine.includes("nombre_tarifa") ||
+    firstLine.includes("department") ||
+    firstLine.includes("rate_name");
   const startIdx = isHeader ? 1 : 0;
 
   const rows = [];
@@ -1769,6 +1775,13 @@ function ZoneSection({ zone, t, planInfo, shopCountry, countryName }) {
 
 // --- CSV Export ---
 
+/** Campo de texto libre → CSV seguro: encomilla si trae coma/comilla/salto. */
+function csvField(value) {
+  const s = String(value ?? "");
+  if (/[",\n]/.test(s)) return `"${s.replaceAll('"', '""')}"`;
+  return s;
+}
+
 function generateCSV(zones, locale) {
   const lines = [getCSVHeaders(locale)];
 
@@ -1786,13 +1799,13 @@ function generateCSV(zones, locale) {
         : "";
       const pTags = JSON.parse(rate.productTags || "[]");
       const fields = [
-        zone.department,
-        rate.name,
+        csvField(zone.department),
+        csvField(rate.name),
         rate.serviceCode,
         rate.price,
         rate.cityCondition,
         cities.length ? `"${cities.join(",")}"` : "",
-        rate.description || "",
+        csvField(rate.description || ""),
         rate.timeFrom || "",
         rate.timeTo || "",
         days.length ? `"${days.join(",")}"` : "",

@@ -215,7 +215,7 @@
     "missing_fields": "Fila {{n}}: faltan campos (mínimo: departamento, nombre, tipo_servicio, precio)",
     "invalid_department": "Fila {{n}}: departamento \"{{dept}}\" no válido",
     "name_required": "Fila {{n}}: nombre de tarifa requerido",
-    "invalid_service": "Fila {{n}}: tipo de servicio \"{{code}}\" no válido (usa: Envío estándar, Envío express, Recoger en tienda)",
+    "invalid_service": "Fila {{n}}: tipo de servicio \"{{code}}\" no válido (usa: mox_envio, mox_express o mox_pickup)",
     "invalid_price": "Fila {{n}}: precio \"{{price}}\" no válido",
     "import_success": "{{zones}} zona(s) y {{rates}} tarifa(s) importadas"
   },

@@ -215,7 +215,7 @@
     "missing_fields": "Row {{n}}: missing fields (minimum: department, name, service_type, price)",
     "invalid_department": "Row {{n}}: department \"{{dept}}\" is not valid",
     "name_required": "Row {{n}}: rate name is required",
-    "invalid_service": "Row {{n}}: service type \"{{code}}\" is not valid (use: Standard shipping, Express shipping, Store pickup)",
+    "invalid_service": "Row {{n}}: service type \"{{code}}\" is not valid (use: mox_envio, mox_express or mox_pickup)",
     "invalid_price": "Row {{n}}: price \"{{price}}\" is not valid",
     "import_success": "{{zones}} zone(s) and {{rates}} rate(s) imported"
   },
