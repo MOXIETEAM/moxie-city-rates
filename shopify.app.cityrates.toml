@@ -31,10 +31,6 @@ scopes = "read_shipping,write_shipping,read_locations,read_products"
 [auth]
 redirect_urls = [ "https://moxie-city-rates-public.onrender.com/api/auth" ]
 
-[app_proxy]
-url = "https://moxie-city-rates-public.onrender.com"
-subpath = "cityrates"
-prefix = "apps"
 
 [app_preferences]
 url = "https://moxie-city-rates-public.onrender.com/app"

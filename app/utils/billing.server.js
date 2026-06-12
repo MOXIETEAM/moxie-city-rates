@@ -1,4 +1,4 @@
-import { PLAN_PRO, PLAN_FREE, unauthenticated } from "../shopify.server";
+import { PLAN_PRO, PLAN_FREE } from "../shopify.server";
 import prisma from "../db.server";
 import { normalizeShopDomain } from "./shop-record.server";
 import { error as logError } from "./logger.server";
@@ -19,7 +19,6 @@ export const PLAN_LIMITS = {
     scheduleRestrictions: false,
     csvImportExport: false,
     productTagRates: false,
-    storefrontRateCalculator: false,
   },
   [PLAN_PRO]: {
     maxZones: Infinity,
@@ -29,7 +28,6 @@ export const PLAN_LIMITS = {
     scheduleRestrictions: true,
     csvImportExport: true,
     productTagRates: true,
-    storefrontRateCalculator: true,
   },
 };
 
@@ -172,57 +170,6 @@ export async function getShopPlan(billing, shop, admin) {
   };
 }
 
-/** Plan para APIs públicas (p. ej. calculadora storefront) usando sesión offline de la tienda. */
-export async function getShopPlanForStorefront(shopDomain) {
-  if (!shopDomain || typeof shopDomain !== "string") {
-    return { plan: PLAN_FREE, limits: PLAN_LIMITS[PLAN_FREE], subscription: null, sponsored: false };
-  }
-  const shopNorm = normalizeShopDomain(shopDomain);
-  try {
-    const { admin } = await unauthenticated.admin(shopDomain.trim());
-    const response = await admin.graphql(`
-      query FletixStorefrontPlanCheck {
-        currentAppInstallation {
-          activeSubscriptions {
-            name
-            status
-          }
-        }
-      }
-    `);
-    const json = await response.json();
-    if (json.errors?.length) {
-      logError("[billing] getShopPlanForStorefront GraphQL:", json.errors);
-    } else {
-      const subs = json.data?.currentAppInstallation?.activeSubscriptions ?? [];
-      const activePro = subs.some(
-        (s) => s.status === "ACTIVE" && s.name === PLAN_PRO,
-      );
-      if (activePro) {
-        return {
-          plan: PLAN_PRO,
-          limits: PLAN_LIMITS[PLAN_PRO],
-          sponsored: false,
-          subscription: subs.find((s) => s.status === "ACTIVE") ?? null,
-        };
-      }
-    }
-  } catch (e) {
-    logError("[billing] getShopPlanForStorefront:", e.message);
-  }
-
-  if (await isSponsoredProShop(shopNorm)) {
-    return { ...proPlanResultFromSponsored() };
-  }
-
-  return {
-    plan: PLAN_FREE,
-    limits: PLAN_LIMITS[PLAN_FREE],
-    sponsored: false,
-    subscription: null,
-  };
-}
-
 export function checkLimit(planInfo, type, currentCount) {
   const { limits } = planInfo;
 
@@ -241,8 +188,6 @@ export function checkLimit(planInfo, type, currentCount) {
       return limits.csvImportExport;
     case "productTags":
       return limits.productTagRates;
-    case "storefrontRateCalculator":
-      return limits.storefrontRateCalculator === true;
     default:
       return true;
   }

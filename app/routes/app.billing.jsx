@@ -345,7 +345,6 @@ export default function BillingPage() {
     { label: t("billing.feature_carrier"), included: true },
     { label: t("billing.feature_fuzzy"), included: true },
     { label: t("billing.feature_metafield"), included: true },
-    { label: t("billing.feature_rate_calculator"), included: true },
     { label: t("billing.feature_weight"), included: true },
     { label: t("billing.feature_cart"), included: true },
     { label: t("billing.feature_schedule"), included: true },

@@ -82,16 +82,6 @@ export const loader = async ({ request }) => {
   const docsUrl =
     process.env.APP_DOCS_URL?.trim() || "https://shopify.dev/docs/apps/build";
 
-  // Deep link to theme editor with app block activation when extension UUID is configured.
-  // Without the env var, fall back to a plain theme editor URL — merchant still has to
-  // find the block manually in the Apps section but the path is still reachable.
-  const extensionUuid = process.env.SHOPIFY_THEME_EXTENSION_UUID?.trim();
-  const blockHandle = process.env.SHOPIFY_THEME_BLOCK_HANDLE?.trim() || "rate-calculator-embed";
-  const shopAdminUrl = `https://${shop}/admin/themes/current/editor`;
-  const themeEditorUrl = extensionUuid
-    ? `${shopAdminUrl}?context=apps&activateAppId=${extensionUuid}/${blockHandle}`
-    : `${shopAdminUrl}?context=apps`;
-
   // Pre-compute the Managed Pricing plan selection URL server-side so the home
   // banner CTA can be a plain `<a target="_top">`. See app.billing.jsx loader
   // for the rationale.
@@ -118,7 +108,6 @@ export const loader = async ({ request }) => {
     planName: planInfo.plan,
     docsUrl,
     hasCarrierRegistered,
-    themeEditorUrl,
   };
 };
 
@@ -306,11 +295,6 @@ export default function Index() {
   const setupPct = Math.round((setupDone / setupTotal) * 100);
 
   const goRules = () => navigate("/app/shipping-rules");
-  const openThemeEditor = () => {
-    if (typeof window !== "undefined" && data.themeEditorUrl) {
-      window.open(data.themeEditorUrl, "_blank", "noopener,noreferrer");
-    }
-  };
 
   return (
     <div
@@ -516,13 +500,6 @@ export default function Index() {
             desc={t("home.step_carrier_desc")}
             actionLabel={!data.hasCarrierRegistered ? t("home.step_action_carrier") : undefined}
             onAction={!data.hasCarrierRegistered ? goRules : undefined}
-          />
-          <SetupStep
-            done={false}
-            label={t("home.step_theme")}
-            desc={t("home.step_theme_desc")}
-            actionLabel={t("home.step_action_theme")}
-            onAction={openThemeEditor}
           />
         </div>
 

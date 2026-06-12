@@ -1,7 +1,0 @@
-api_version = "2026-04"
-
-[[extensions]]
-name = "Fletix Rate Calculator"
-handle = "fletix-rate-calculator"
-uid = "61f4c972-2631-8823-bc9d-2083db6ba9a59b3b9ef6"
-type = "theme"
