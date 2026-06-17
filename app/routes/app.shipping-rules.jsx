@@ -18,7 +18,7 @@ import { createTranslator, getLocale } from "../utils/i18n";
 import { debug, error as logError } from "../utils/logger.server";
 import { ensureFletixCarrierService } from "../utils/carrier-service.server";
 import { detectEnabledServicesForDepartment, getServiceAvailabilityByProvince } from "../utils/locations.server";
-import { getShopPlan, checkLimit, PLAN_LIMITS } from "../utils/billing.server";
+import { getShopPlan, checkLimit, PLAN_LIMITS, getBillingMode } from "../utils/billing.server";
 import { PLAN_FREE, PLAN_PRO } from "../utils/billing.constants";
 import { getShopMeta } from "../utils/shop-record.server";
 import prisma from "../db.server";
@@ -283,8 +283,9 @@ export const loader = async ({ request }) => {
   // banner with a native `<a target="_top">` link. Without this banner the
   // reviewer sees a page where nothing works and no explanation — a likely
   // rejection reason.
+  const billingMode = getBillingMode();
   let planSelectionUrl = null;
-  if (process.env.BILLING_MODE === "managed") {
+  if (billingMode === "managed") {
     const appHandle = (process.env.APP_HANDLE || "").trim();
     const storeHandle = (session.shop || "").replace(/\.myshopify\.com$/, "");
     if (appHandle && storeHandle) {
@@ -318,7 +319,7 @@ export const loader = async ({ request }) => {
     defaultZones,
     planInfo,
     planSelectionUrl,
-    billingMode: process.env.BILLING_MODE === "managed" ? "managed" : "api",
+    billingMode,
     shopCountry: shopMeta.country || "CO",
     shopCurrency: shopMeta.currency,
     cityMatchThreshold: shopMeta.cityMatchThreshold,

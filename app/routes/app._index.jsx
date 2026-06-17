@@ -2,7 +2,7 @@ import { useLoaderData, useNavigate, useOutletContext, useRouteError } from "rea
 import { boundary } from "@shopify/shopify-app-react-router/server";
 import { authenticate } from "../shopify.server";
 import { createTranslator } from "../utils/i18n";
-import { getShopPlan } from "../utils/billing.server";
+import { getShopPlan, getBillingMode } from "../utils/billing.server";
 import prisma from "../db.server";
 import { error as logError } from "../utils/logger.server";
 import { CARRIER_NAME } from "../utils/carrier-service.server";
@@ -85,8 +85,9 @@ export const loader = async ({ request }) => {
   // Pre-compute the Managed Pricing plan selection URL server-side so the home
   // banner CTA can be a plain `<a target="_top">`. See app.billing.jsx loader
   // for the rationale.
+  const billingMode = getBillingMode();
   let planSelectionUrl = null;
-  if (process.env.BILLING_MODE === "managed") {
+  if (billingMode === "managed") {
     const appHandle = (process.env.APP_HANDLE || "").trim();
     const storeHandle = (shop || "").replace(/\.myshopify\.com$/, "");
     if (appHandle && storeHandle) {
@@ -104,7 +105,7 @@ export const loader = async ({ request }) => {
     weightTierCount,
     cartTotalCount,
     planSelectionUrl,
-    billingMode: process.env.BILLING_MODE === "managed" ? "managed" : "api",
+    billingMode,
     planName: planInfo.plan,
     docsUrl,
     hasCarrierRegistered,
@@ -381,44 +382,14 @@ export default function Index() {
                 {t("billing.needs_subscription_cta")}
               </a>
             ) : (
+              // api / custom modes: route to the billing page where the subscribe
+              // flow lives (App Bridge-aware fetcher for custom, confirmationUrl
+              // redirect for api). Doing the subscribe fetch from here hit an
+              // auth redirect that returned HTML instead of JSON. One source of
+              // truth for subscribing, works the same across all billing modes.
               <button
                 type="button"
-                onClick={async () => {
-                  try {
-                    const res = await fetch("/app/billing/subscribe", {
-                      method: "POST",
-                      headers: { Accept: "application/json" },
-                    });
-                    const text = await res.text();
-                    let data;
-                    try {
-                      data = JSON.parse(text);
-                    } catch {
-                      window.alert(
-                        `Server returned HTML instead of JSON (HTTP ${res.status}). Refresh and try again.`,
-                      );
-                      return;
-                    }
-                    if (data.confirmationUrl) {
-                      const top = window.top || window.parent || window;
-                      try {
-                        top.location.href = data.confirmationUrl;
-                      } catch {
-                        window.location.href = data.confirmationUrl;
-                      }
-                      return;
-                    }
-                    if (data.alreadyActive) {
-                      window.location.reload();
-                      return;
-                    }
-                    if (data.error) {
-                      window.alert(data.error);
-                    }
-                  } catch (e) {
-                    window.alert(e?.message || "Network error");
-                  }
-                }}
+                onClick={() => navigate("/app/billing")}
                 style={{
                   display: "inline-block",
                   padding: "12px 22px",
