@@ -144,15 +144,17 @@ export const action = async ({ request }) => {
 
     const billingMode = getBillingMode();
 
-    // Custom (test) mode: skip Shopify billing entirely. Flip the shop to Pro
-    // locally via AppShop.sponsoredPro and tell the client to reload. The
-    // billing loader then reports Pro through the sponsored path.
+    // Custom (test) mode never reaches this endpoint — the billing page handles
+    // it via useFetcher → the route action (avoids the auth-redirect-returns-HTML
+    // failure mode of a raw fetch). Treat it like managed: do not call the
+    // Billing API. This guard is just defensive in case it is hit directly.
     if (billingMode === "custom") {
       const ok = await setCustomPro(session.shop, true);
-      if (!ok) {
-        return json({ success: false, error: "Could not activate plan (custom mode)" });
-      }
-      return json({ success: true, reload: true, custom: true });
+      return json(
+        ok
+          ? { success: true, reload: true, custom: true }
+          : { success: false, error: "Could not activate plan (custom mode)" },
+      );
     }
 
     // Managed Pricing apps cannot call appSubscriptionCreate — Shopify rejects

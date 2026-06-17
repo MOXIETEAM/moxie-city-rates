@@ -119,6 +119,20 @@ export const action = async ({ request }) => {
       return { success: true, message: t("billing.downgrade") };
     }
 
+    // Custom (test) mode subscribe. Handled here via the React Router data
+    // pipeline (useFetcher) instead of a raw fetch to /app/billing/subscribe so
+    // App Bridge attaches the session token and we never get an auth redirect
+    // returning HTML. Just flips AppShop.sponsoredPro; the fetcher submission
+    // auto-revalidates the loader so the plan banner updates with no reload.
+    if (intent === "custom_subscribe") {
+      if (getBillingMode() !== "custom") {
+        return { success: false, error: "Not in custom billing mode" };
+      }
+      const ok = await setCustomPro(session.shop, true);
+      if (!ok) return { success: false, error: "Could not activate plan (custom mode)" };
+      return { success: true, message: t("billing.start_trial") };
+    }
+
     // Unknown intent — return null so the loader stays untouched. Logged so
     // unexpected POSTs that would have caused a silent 500 surface in logs.
     logError("[billing action] unknown intent:", intent);
@@ -347,6 +361,13 @@ export default function BillingPage() {
     }
   };
 
+  // Custom (test) mode subscribe — goes through the route action via fetcher so
+  // App Bridge handles auth and React Router revalidates the loader on success.
+  // No raw fetch, no confirmationUrl, no HTML-instead-of-JSON failure mode.
+  const handleCustomSubscribe = () => {
+    fetcher.submit({ _intent: "custom_subscribe" }, { method: "POST" });
+  };
+
   const proFeatures = [
     { label: t("billing.feature_zones_unlimited"), included: true },
     { label: t("billing.feature_rates_unlimited"), included: true },
@@ -465,7 +486,7 @@ export default function BillingPage() {
           features={proFeatures}
           isCurrent={isPro}
           actionLabel={isPro ? t("billing.downgrade") : t("billing.start_trial")}
-          onAction={isPro ? handleDowngrade : billingMode === "managed" ? undefined : handleStartTrial}
+          onAction={isPro ? handleDowngrade : billingMode === "managed" ? undefined : billingMode === "custom" ? handleCustomSubscribe : handleStartTrial}
           actionHref={!isPro && billingMode === "managed" ? planSelectionUrl : undefined}
           highlight={!isPro}
           loading={loading}
