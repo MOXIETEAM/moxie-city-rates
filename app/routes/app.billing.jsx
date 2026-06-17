@@ -3,7 +3,7 @@ import { useLoaderData, useOutletContext, useRouteError, useFetcher } from "reac
 import { boundary } from "@shopify/shopify-app-react-router/server";
 import { authenticate } from "../shopify.server";
 import { PLAN_FREE, PLAN_PRO } from "../utils/billing.constants";
-import { getShopPlan, resolveBillingTestMode, PLAN_LIMITS } from "../utils/billing.server";
+import { getShopPlan, resolveBillingTestMode, PLAN_LIMITS, getBillingMode, setCustomPro } from "../utils/billing.server";
 import { getLocale, createTranslator } from "../utils/i18n";
 import { error as logError } from "../utils/logger.server";
 import prisma from "../db.server";
@@ -47,8 +47,9 @@ export const loader = async ({ request }) => {
   // fetch+JSON parsing, no transient-activation timing. This is the only flow
   // that survives every variant of "App Bridge isn't loaded yet" or "server
   // returned HTML instead of JSON" that we hit with fetch-based subscribe.
+  const billingMode = getBillingMode();
   let planSelectionUrl = null;
-  if (process.env.BILLING_MODE === "managed") {
+  if (billingMode === "managed") {
     const appHandle = (process.env.APP_HANDLE || "").trim();
     const storeHandle = (session.shop || "").replace(/\.myshopify\.com$/, "");
     if (appHandle && storeHandle) {
@@ -65,7 +66,7 @@ export const loader = async ({ request }) => {
     planInfo,
     usage: { zones: zoneCount, rates: rateCount },
     planSelectionUrl,
-    billingMode: process.env.BILLING_MODE === "managed" ? "managed" : "api",
+    billingMode,
   };
 };
 
@@ -85,6 +86,14 @@ export const action = async ({ request }) => {
     const isTest = await resolveBillingTestMode(admin);
 
     if (intent === "cancel_subscription") {
+      // Custom (test) mode: downgrade just flips AppShop.sponsoredPro off so the
+      // shop returns to Free. No Shopify billing involved.
+      if (getBillingMode() === "custom") {
+        const ok = await setCustomPro(session.shop, false);
+        if (!ok) return { success: false, error: "Could not downgrade (custom mode)" };
+        return { success: true, message: t("billing.downgrade") };
+      }
+
       let planInfo;
       try {
         planInfo = await getShopPlan(billing, session.shop, admin);
@@ -326,7 +335,7 @@ export default function BillingPage() {
         }
         return;
       }
-      if (data.alreadyActive) {
+      if (data.alreadyActive || data.reload) {
         window.location.reload();
         return;
       }
@@ -353,7 +362,9 @@ export default function BillingPage() {
   ];
 
   const handleDowngrade = () => {
-    if (sponsoredOnlyPro) {
+    // In custom (test) mode the shop is "sponsored" but downgrade is allowed —
+    // it just flips the test flag off. Only real sponsored shops are blocked.
+    if (sponsoredOnlyPro && billingMode !== "custom") {
       window.alert(t("billing.sponsored_cannot_downgrade"));
       return;
     }

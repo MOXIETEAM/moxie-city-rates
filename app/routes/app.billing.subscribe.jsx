@@ -1,6 +1,6 @@
 import { authenticate } from "../shopify.server";
 import { PLAN_PRO } from "../utils/billing.constants";
-import { resolveBillingTestMode } from "../utils/billing.server";
+import { resolveBillingTestMode, getBillingMode, setCustomPro } from "../utils/billing.server";
 import { error as logError } from "../utils/logger.server";
 
 /**
@@ -17,12 +17,16 @@ import { error as logError } from "../utils/logger.server";
  *     appSubscriptionCreate and the merchant approves a confirmationUrl. Used
  *     by the legacy Fletix deploy that still controls its own pricing.
  *
+ *   - "custom" (local test mode): no redirect and no billing call. Subscribe
+ *     flips AppShop.sponsoredPro so the shop becomes Pro instantly, letting us
+ *     test the Free→Pro flow on a preview deploy. NEVER use in production.
+ *
  * Default: "api" so the legacy Fletix deploy keeps working without a new env
  * var. Public listings MUST set BILLING_MODE=managed.
+ *
+ * getBillingMode() lives in billing.server.js so the loader, action and this
+ * endpoint all read the same source of truth.
  */
-function getBillingMode() {
-  return process.env.BILLING_MODE === "managed" ? "managed" : "api";
-}
 
 /**
  * Resolves the app handle for Managed Pricing plan selection URLs. The handle
@@ -139,6 +143,17 @@ export const action = async ({ request }) => {
     const { billing, session, admin } = await authenticate.admin(request);
 
     const billingMode = getBillingMode();
+
+    // Custom (test) mode: skip Shopify billing entirely. Flip the shop to Pro
+    // locally via AppShop.sponsoredPro and tell the client to reload. The
+    // billing loader then reports Pro through the sponsored path.
+    if (billingMode === "custom") {
+      const ok = await setCustomPro(session.shop, true);
+      if (!ok) {
+        return json({ success: false, error: "Could not activate plan (custom mode)" });
+      }
+      return json({ success: true, reload: true, custom: true });
+    }
 
     // Managed Pricing apps cannot call appSubscriptionCreate — Shopify rejects
     // with "Managed Pricing Apps cannot use the Billing API". Redirect the

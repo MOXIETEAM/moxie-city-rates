@@ -32,6 +32,49 @@ export const PLAN_LIMITS = {
 };
 
 /**
+ * BILLING_MODE selects the billing flow for this deployment:
+ *
+ *   - "managed": Shopify App Pricing (Managed Pricing). Plans live in the
+ *     Partner Dashboard; the merchant is redirected to the Shopify-hosted plan
+ *     selection page. The Billing API mutations are forbidden.
+ *   - "api": legacy Billing API. The app creates the charge via
+ *     appSubscriptionCreate and the merchant approves a confirmationUrl.
+ *   - "custom": local test mode. No redirect and no Shopify billing call —
+ *     clicking subscribe flips AppShop.sponsoredPro so the shop becomes Pro
+ *     immediately. Lets us exercise the full Free→Pro gate on a test/preview
+ *     deploy without going through Shopify billing. NEVER use in production.
+ *
+ * Default: "api" so existing deploys keep working without a new env var.
+ */
+export function getBillingMode() {
+  const mode = (process.env.BILLING_MODE || "").trim();
+  if (mode === "managed") return "managed";
+  if (mode === "custom") return "custom";
+  return "api";
+}
+
+/**
+ * Custom (test) mode helper: toggles Pro for a shop by setting
+ * AppShop.sponsoredPro. Upserts so it works even if the install row is missing.
+ * Returns true on success.
+ */
+export async function setCustomPro(shop, enabled) {
+  const n = normalizeShopDomain(shop);
+  if (!n) return false;
+  try {
+    await prisma.appShop.upsert({
+      where: { shop: n },
+      update: { sponsoredPro: enabled },
+      create: { shop: n, sponsoredPro: enabled },
+    });
+    return true;
+  } catch (e) {
+    logError("[billing] setCustomPro:", e?.message || e);
+    return false;
+  }
+}
+
+/**
  * Returns true when billing should use test mode for this shop.
  *
  * Shopify rejects real charges on partner development stores. Reviewers and
