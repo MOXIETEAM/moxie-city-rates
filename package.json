@@ -2,7 +2,8 @@
   "name": "delivery-rules",
   "private": true,
   "scripts": {
-    "build": "react-router build",
+    "postinstall": "prisma generate",
+    "build": "prisma generate && react-router build",
     "dev": "shopify app dev --config=custom",
     "dev:public": "shopify app dev --config=public",
     "dev:custom": "shopify app dev --config=custom",
