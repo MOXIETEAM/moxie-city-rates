@@ -78,8 +78,8 @@ const VALID_CONDITIONS = new Set(["all", "include", "exclude"]);
 const VALID_DAYS = new Set(["mon", "tue", "wed", "thu", "fri", "sat", "sun"]);
 
 function getCSVHeaders(locale) {
-  if (locale === "en") return "department,rate_name,service_type,price,city_condition,cities,description,from_time,to_time,days,pricing_mode,weight_ranges,cart_ranges,product_condition,product_tags,delivery_min_days,delivery_max_days,product_field,product_match_mode,country";
-  return "departamento,nombre_tarifa,tipo_servicio,precio,condicion_ciudad,ciudades,descripcion,hora_desde,hora_hasta,dias,modo_precio,rangos_peso,rangos_monto,condicion_producto,tags_producto,entrega_min_dias,entrega_max_dias,campo_producto,modo_producto,pais";
+  if (locale === "en") return "department,rate_name,service_type,price,city_condition,cities,description,from_time,to_time,days,pricing_mode,weight_ranges,cart_ranges,product_condition,product_tags,delivery_min_days,delivery_max_days,product_field,product_match_mode,country,warehouse,city_aliases";
+  return "departamento,nombre_tarifa,tipo_servicio,precio,condicion_ciudad,ciudades,descripcion,hora_desde,hora_hasta,dias,modo_precio,rangos_peso,rangos_monto,condicion_producto,tags_producto,entrega_min_dias,entrega_max_dias,campo_producto,modo_producto,pais,bodega,alias_ciudades";
 }
 
 /** Parsea una línea CSV respetando campos entre comillas. */
@@ -137,7 +137,7 @@ function parseCSVContent(csvText, t) {
       continue;
     }
 
-    const [dept, name, serviceCode, priceStr, condition, citiesStr, description, timeFrom, timeTo, daysStr, pricingModeStr, weightTiersStr, cartTotalTiersStr, productConditionStr, productTagsStr, minDeliveryStr, maxDeliveryStr, productFieldStr, productMatchModeStr, countryStr] = fields;
+    const [dept, name, serviceCode, priceStr, condition, citiesStr, description, timeFrom, timeTo, daysStr, pricingModeStr, weightTiersStr, cartTotalTiersStr, productConditionStr, productTagsStr, minDeliveryStr, maxDeliveryStr, productFieldStr, productMatchModeStr, countryStr, warehouseStr, cityAliasesStr] = fields;
 
     // Accept any non-empty region name. Membership in a fixed list can't be
     // enforced internationally (zones now span multiple countries); the zone
@@ -160,7 +160,8 @@ function parseCSVContent(csvText, t) {
     const pricingMode = pricingModeStr === "weight_tiers" ? "weight_tiers"
       : pricingModeStr === "cart_total" ? "cart_total" : "flat";
 
-    const price = parseInt(priceStr, 10);
+    // parseFloat (no parseInt): los precios pueden tener decimales (USD 12.99).
+    const price = parseFloat(priceStr);
     if (pricingMode === "flat" && (isNaN(price) || price < 0)) {
       errors.push(t("csv.invalid_price", { n: lineNum, price: priceStr }));
       continue;
@@ -211,6 +212,19 @@ function parseCSVContent(csvText, t) {
     const productField = productFieldStr && VALID_PRODUCT_FIELDS.has(productFieldStr) ? productFieldStr : "tags";
     const productMatchMode = productMatchModeStr === "all" ? "all" : "any";
 
+    // Alias de ciudad (opcional): "CANONICAL>alias1|alias2;CANONICAL2>alias3".
+    // Mapa canónico→variantes para homologación fuzzy en checkout.
+    const cityAliases = {};
+    if (cityAliasesStr) {
+      for (const seg of cityAliasesStr.split(";")) {
+        const [canon, aliasesPart] = seg.split(">");
+        const key = (canon || "").trim().toUpperCase();
+        if (!key || !aliasesPart) continue;
+        const arr = aliasesPart.split("|").map((a) => a.trim()).filter(Boolean);
+        if (arr.length) cityAliases[key] = arr;
+      }
+    }
+
     rows.push({
       department: dept,
       name,
@@ -218,6 +232,10 @@ function parseCSVContent(csvText, t) {
       price: isNaN(price) ? 0 : price,
       cityCondition,
       cities,
+      cityAliases,
+      // Nombre de bodega de origen (opcional) — se resuelve a warehouseId en el
+      // import (necesita la lista de Locations / admin).
+      warehouseName: (warehouseStr || "").trim(),
       description: description || "",
       timeFrom: timeFrom || null,
       timeTo: timeTo || null,
@@ -667,6 +685,12 @@ export const action = async ({ request }) => {
       // its enabledServices auto-detected without N extra GraphQL calls.
       const locationsMap = await getServiceAvailabilityByProvince(admin);
 
+      // Bodegas para resolver la columna `bodega` (nombre → warehouseId).
+      // Match por nombre normalizado; sin match → null (= todas las bodegas).
+      const csvWarehouses = await getWarehouses(admin);
+      const normName = (s) => String(s || "").trim().toUpperCase().normalize("NFD").replace(/[̀-ͯ]/g, "");
+      const warehouseByName = new Map(csvWarehouses.map((w) => [normName(w.name), w.id]));
+
       let zonesCreated = 0;
       let ratesCreated = 0;
 
@@ -697,6 +721,8 @@ export const action = async ({ request }) => {
           description: row.description,
           cityCondition: row.cityCondition,
           cities: JSON.stringify(row.cities),
+          cityAliases: JSON.stringify(row.cityAliases || {}),
+          warehouseId: row.warehouseName ? (warehouseByName.get(normName(row.warehouseName)) || null) : null,
           timeFrom: row.timeFrom,
           timeTo: row.timeTo,
           daysOfWeek: JSON.stringify(row.daysOfWeek),
@@ -2033,12 +2059,12 @@ function ZoneSection({ zone, t, planInfo, shopCountry, countryName, searchQuery 
  */
 function generateTemplateCSV(locale) {
   const rows = [
-    'Antioquia,Envío estándar,mox_envio,12000,all,,Entrega en todo el departamento,,,,flat,,,all,,2,4,tags,any,CO',
-    'Antioquia,Envío express,mox_express,20000,include,"MEDELLÍN,ENVIGADO,SABANETA",Solo área metropolitana,08:00,18:00,"mon,tue,wed,thu,fri",flat,,,all,,1,1,tags,any,CO',
-    'Cundinamarca,Envío por peso,mox_envio,0,all,,,,,,weight_tiers,"0-5:10000;5-15:20000",,all,,2,5,tags,any,CO',
-    'Cundinamarca,Gratis desde 200.000,mox_envio,0,all,,,,,,cart_total,,"0-200000:15000;200000-0:0",all,,2,5,tags,any,CO',
-    'Antioquia,Refrigerado,mox_envio,25000,all,,Cadena de frío,,,,flat,,,include,congelados,1,2,collection,all,CO',
-    'Jalisco,Envío MX,mox_envio,150,all,,,,,,flat,,,all,,3,6,tags,any,MX',
+    'Antioquia,Envío estándar,mox_envio,12000,all,,Entrega en todo el departamento,,,,flat,,,all,,2,4,tags,any,CO,,',
+    'Antioquia,Envío express,mox_express,20000,include,"MEDELLÍN,ENVIGADO,SABANETA",Solo área metropolitana,08:00,18:00,"mon,tue,wed,thu,fri",flat,,,all,,1,1,tags,any,CO,Bodega Medellín,"MEDELLÍN>medallo|medall;ENVIGADO>envig"',
+    'Cundinamarca,Envío por peso,mox_envio,0,all,,,,,,weight_tiers,"0-5:10000;5-15:20000",,all,,2,5,tags,any,CO,,',
+    'Cundinamarca,Gratis desde 200.000,mox_envio,0,all,,,,,,cart_total,,"0-200000:15000;200000-0:0",all,,2,5,tags,any,CO,,',
+    'Antioquia,Refrigerado,mox_envio,25000,all,,Cadena de frío,,,,flat,,,include,congelados,1,2,collection,all,CO,,',
+    'Jalisco,Envío MX,mox_envio,150,all,,,,,,flat,,,all,,3,6,tags,any,MX,,',
   ];
   return [getCSVHeaders(locale), ...rows].join("\n");
 }
@@ -2064,6 +2090,8 @@ const CSV_HELP_COLUMNS = [
   { es: "campo_producto", en: "product_field", values: "tags | vendor | product_type | collection | sku", example: "collection" },
   { es: "modo_producto", en: "product_match_mode", values: "any | all", example: "any" },
   { es: "pais", en: "country", values: "ISO-2", example: "CO, MX, BR…" },
+  { es: "bodega", en: "warehouse", values: "", example: "Bodega Medellín" },
+  { es: "alias_ciudades", en: "city_aliases", values: "CANÓNICA>alias1|alias2;…", example: '"MEDELLÍN>medallo|medell"' },
 ];
 
 function CsvHelp({ t, locale }) {
@@ -2115,8 +2143,9 @@ function csvField(value) {
   return s;
 }
 
-function generateCSV(zones, locale) {
+function generateCSV(zones, locale, warehouses = []) {
   const lines = [getCSVHeaders(locale)];
+  const whById = new Map((warehouses || []).map((w) => [w.id, w.name]));
 
   for (const zone of zones) {
     for (const rate of zone.rates) {
@@ -2131,6 +2160,12 @@ function generateCSV(zones, locale) {
         ? `"${cTiers.map((t) => `${t.minAmount}-${t.maxAmount}:${t.price}`).join(";")}"`
         : "";
       const pTags = JSON.parse(rate.productTags || "[]");
+      // Alias de ciudad → "CANONICAL>a|b;CANONICAL2>c" (round-trip con el parse).
+      let aliasMap = {};
+      try { aliasMap = JSON.parse(rate.cityAliases || "{}") || {}; } catch { aliasMap = {}; }
+      const aliasStr = Object.entries(aliasMap)
+        .map(([k, v]) => `${k}>${(Array.isArray(v) ? v : []).join("|")}`)
+        .join(";");
       const fields = [
         csvField(zone.department),
         csvField(rate.name),
@@ -2152,6 +2187,8 @@ function generateCSV(zones, locale) {
         rate.productField || "tags",
         rate.productMatchMode || "any",
         zone.country || "CO",
+        csvField(rate.warehouseId ? (whById.get(rate.warehouseId) || "") : ""),
+        aliasStr ? `"${aliasStr}"` : "",
       ];
       lines.push(fields.join(","));
     }
@@ -2413,10 +2450,10 @@ export default function ShippingRules() {
       shopify.toast.show(t("billing.limit_feature"), { isError: true });
       return;
     }
-    const csv = generateCSV(zones, locale);
+    const csv = generateCSV(zones, locale, warehouses);
     const filename = locale === "en" ? "shipping-rules.csv" : "reglas-envio.csv";
     downloadCSV(csv, filename);
-  }, [zones, csvAllowed, shopify, t]);
+  }, [zones, csvAllowed, shopify, t, locale, warehouses]);
 
   const [showAddDefault, setShowAddDefault] = useState(false);
 

@@ -274,16 +274,8 @@ export async function getRatesForDestination(shop, departmentSlug, city, departm
   // si no se pudo resolver / no aplica (ej. simulador sin origen).
   const originWarehouseId = opts.originWarehouseId || null;
 
-  return zone.rates.filter((rate) => {
-    // Scope por origen: una rate con bodega asignada (warehouseId) solo aplica
-    // si el origen del checkout resuelve a ESA bodega. warehouseId null = la
-    // rate aplica a cualquier origen (pass-through, retrocompatible). Si el
-    // origen no se pudo resolver (originWarehouseId null) no se filtra — se
-    // muestran de más antes que ocultar una tarifa válida.
-    if (originWarehouseId && rate.warehouseId && rate.warehouseId !== originWarehouseId) {
-      traceRule(rate, false, "origin_mismatch");
-      return false;
-    }
+  // Primero filtra por TODO menos origen (ciudad, horario, servicio, producto).
+  const passed = zone.rates.filter((rate) => {
     if (enabledServicesForZone && !enabledServicesForZone.has(rate.serviceCode)) {
       info(`[rates-filter] ${zone.slug}/${rate.name}(${rate.serviceCode}) DROP enabledServices=[${[...enabledServicesForZone].join(",")}]`);
       traceRule(rate, false, "service_disabled");
@@ -339,9 +331,26 @@ export async function getRatesForDestination(shop, departmentSlug, city, departm
       return false;
     }
 
-    traceRule(rate, true, "ok");
+    // Marca el reason según el scope por origen, pero SIEMPRE incluye la rate
+    // en `passed` (la separación real la hace el fallback de abajo).
+    const originDrops = originWarehouseId && rate.warehouseId && rate.warehouseId !== originWarehouseId;
+    traceRule(rate, !originDrops, originDrops ? "origin_mismatch" : "ok");
     return true;
   });
+
+  // Scope por origen (Parcelify-style) con FALLBACK SEGURO:
+  //  - warehouseId null  → la rate aplica a cualquier origen.
+  //  - origen no resuelto → no se filtra (se muestra de más).
+  //  - si el scope por origen vaciaría el resultado pero SIN él habría rates,
+  //    se devuelven sin filtrar para no romper el checkout ("no delivery").
+  if (!originWarehouseId) return passed;
+  const scoped = passed.filter((r) => !r.warehouseId || r.warehouseId === originWarehouseId);
+  if (scoped.length === 0 && passed.length > 0) {
+    info(`[rates-filter] ${zone.slug} origin=${originWarehouseId} dejaría 0 rates — fallback a sin filtrar (${passed.length})`);
+    trace?.steps.push({ step: "origin_fallback", originWarehouseId, kept: passed.length });
+    return passed;
+  }
+  return scoped;
 }
 
 // --- CRUD ---

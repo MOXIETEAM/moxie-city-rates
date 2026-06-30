@@ -248,7 +248,9 @@
     "csv_col_14": "Delivery estimate in calendar days (Shopify shows dates at checkout).",
     "csv_col_15": "Product attribute to compare: tags, vendor, type, collection or SKU.",
     "csv_col_16": "any = one cart item is enough; all = every item must match.",
-    "csv_col_17": "Zone country (2-letter code). Empty = your shop country."
+    "csv_col_17": "Zone country (2-letter code). Empty = your shop country.",
+    "csv_col_18": "Origin warehouse (exact Location name). Empty = applies to any origin. Display/scope only, does not force fulfillment.",
+    "csv_col_19": "City aliases for checkout matching. Format CANONICAL>alias1|alias2, separate cities with ;"
   },
   "action": {
     "zone_created": "Zone \"{{dept}}\" created and synced",
