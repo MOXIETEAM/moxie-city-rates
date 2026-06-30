@@ -1,4 +1,4 @@
-import { useFetcher, useLoaderData, useOutletContext, useRouteError } from "react-router";
+import { useFetcher, useLoaderData, useOutletContext, useRouteError, useSearchParams } from "react-router";
 import { useState, useEffect, useCallback, useRef, useMemo, createContext, useContext } from "react";
 import { useAppBridge } from "@shopify/app-bridge-react";
 import { boundary } from "@shopify/shopify-app-react-router/server";
@@ -18,9 +18,14 @@ import { createTranslator, getLocale } from "../utils/i18n";
 import { debug, error as logError } from "../utils/logger.server";
 import { ensureFletixCarrierService } from "../utils/carrier-service.server";
 import { detectEnabledServicesForDepartment, getServiceAvailabilityByProvince } from "../utils/locations.server";
+import { getWarehouses } from "../utils/warehouse.server";
+import { warehousesForRate } from "../utils/warehouse";
 import { getShopPlan, checkLimit, PLAN_LIMITS, getBillingMode } from "../utils/billing.server";
 import { PLAN_FREE, PLAN_PRO } from "../utils/billing.constants";
 import { getShopMeta } from "../utils/shop-record.server";
+import { getQuotes, createQuoteTrace, saveQuote, QUOTE_RETENTION_DAYS } from "../utils/quote-log.server";
+import { quoteShipping } from "../rate-engine.server";
+import { QuotesView } from "../components/quotes-ui";
 import prisma from "../db.server";
 
 import MUNICIPALITIES from "../data/municipalities.json";
@@ -29,9 +34,12 @@ import { getSubdivisions, isSupportedCountry, formatMoney, getCountries, zoneSlu
 // Shop currency + subdivision list, provided once at the page root so the
 // nested rate/zone components format money in the shop currency and offer the
 // right regions without prop-drilling. Defaults keep the legacy CO behavior.
-const ShopMetaContext = createContext({ currency: "COP", subdivisions: [] });
+const ShopMetaContext = createContext({ currency: "COP", subdivisions: [], warehouses: [] });
 function useShopCurrency() {
   return useContext(ShopMetaContext).currency || "COP";
+}
+function useWarehouses() {
+  return useContext(ShopMetaContext).warehouses || [];
 }
 
 const DEPARTMENTS = [
@@ -256,13 +264,22 @@ export const loader = async ({ request }) => {
   try {
     // Un default por país: siempre el del país de la tienda + uno por cada
     // país que ya tenga zonas creadas (multi-mercado).
-    const shopCountry = shopMeta.country || "CO";
+    // Normalizar a ISO-2 mayúsculas para no duplicar un mercado por diferencias
+    // de capitalización/espacios (ej. "CO" + "co" generaban dos defaults).
+    const shopCountry = (shopMeta.country || "CO").trim().toUpperCase();
     const countrySet = new Set([shopCountry]);
     for (const z of zones) {
-      if (z.country && !z.slug.startsWith("_default")) countrySet.add(z.country);
+      if (z.country && !z.slug.startsWith("_default")) countrySet.add(z.country.trim().toUpperCase());
     }
+    // Dedupe por slug: dos países distintos podrían resolver al mismo default
+    // (_default del país de la tienda) y devolver la misma fila dos veces.
+    const seenSlugs = new Set();
     for (const c of countrySet) {
-      defaultZones.push(await getOrCreateDefaultZoneForCountry(session.shop, c, shopCountry));
+      const dz = await getOrCreateDefaultZoneForCountry(session.shop, c, shopCountry);
+      if (dz && !seenSlugs.has(dz.slug)) {
+        seenSlugs.add(dz.slug);
+        defaultZones.push(dz);
+      }
     }
   } catch (e) {
     logError("[shipping-rules loader] getOrCreateDefaultZoneForCountry failed:", e?.message || e);
@@ -297,8 +314,13 @@ export const loader = async ({ request }) => {
   // del formulario "Agregar zona" (multi-mercado).
   const countries = getCountries();
   const subdivisionsByCountry = {};
+  // Versión {code,name} para el simulador de Consultar (provincia = código,
+  // que el rate-engine resuelve a slug). El modal de tarifas usa solo nombres.
+  const subdivisionsFull = {};
   for (const c of countries) {
-    subdivisionsByCountry[c.code] = getSubdivisions(c.code).map((s) => s.name);
+    const subs = getSubdivisions(c.code);
+    subdivisionsByCountry[c.code] = subs.map((s) => s.name);
+    subdivisionsFull[c.code] = subs.map((s) => ({ code: s.code, name: s.name }));
   }
 
   // Países a los que la tienda realmente vende (Shopify Markets). El selector
@@ -314,19 +336,43 @@ export const loader = async ({ request }) => {
     logError("[shipping-rules loader] shipsToCountries failed:", e?.message || e);
   }
 
+  // Bodegas de origen (Shopify Locations) — solo para mostrar de qué bodega
+  // sale cada tarifa. getWarehouses nunca lanza (devuelve [] ante error), así
+  // que la página renderiza igual sin el tag de bodega si la API falla.
+  const warehouses = await getWarehouses(admin);
+
+  // Log de cotizaciones para la pestaña Consultar (paginación/filtro por query
+  // params). Nunca rompe la página si falla.
+  const url2 = new URL(request.url);
+  const quotePage = parseInt(url2.searchParams.get("page") || "1", 10) || 1;
+  const quoteOnlyEmpty = url2.searchParams.get("only_empty") === "1";
+  const quoteSearch = url2.searchParams.get("q") || "";
+  let quoteData = { total: 0, quotes: [], page: 1, pageSize: 25 };
+  try {
+    quoteData = await getQuotes(session.shop, { page: quotePage, onlyEmpty: quoteOnlyEmpty, search: quoteSearch });
+  } catch (e) {
+    logError("[shipping-rules loader] getQuotes failed:", e?.message || e);
+  }
+
   return {
+    quoteData,
+    quoteOnlyEmpty,
+    quoteSearch,
+    retentionDays: QUOTE_RETENTION_DAYS,
     zones,
     defaultZones,
     planInfo,
     planSelectionUrl,
     billingMode,
-    shopCountry: shopMeta.country || "CO",
+    shopCountry: (shopMeta.country || "CO").trim().toUpperCase(),
     shopCurrency: shopMeta.currency,
     cityMatchThreshold: shopMeta.cityMatchThreshold,
     subdivisions,
     countries,
     subdivisionsByCountry,
+    subdivisionsFull,
     shipsToCountries,
+    warehouses,
   };
 };
 
@@ -341,6 +387,49 @@ export const action = async ({ request }) => {
   const intent = formData.get("_intent");
 
   try {
+    if (intent === "simulate") {
+      // Simulador de la pestaña Consultar — corre el MISMO pipeline del
+      // checkout (rate-engine) sobre un destino + carrito ficticio.
+      const destCountry = String(formData.get("country") || shopMeta.country || "CO");
+      const province = String(formData.get("province") || "");
+      const city = String(formData.get("city") || "");
+      const weightKg = parseFloat(formData.get("weight_kg")) || 0;
+      const cartTotal = parseFloat(formData.get("cart_total")) || 0;
+      const itemTags = String(formData.get("tags") || "").split(",").map((s) => s.trim().toLowerCase()).filter(Boolean);
+      const vendor = String(formData.get("vendor") || "").trim();
+      const sku = String(formData.get("sku") || "").trim();
+      const productType = String(formData.get("product_type") || "").trim();
+      const collections = String(formData.get("collections") || "").split(",").map((s) => s.trim()).filter(Boolean);
+
+      if (!province) return { error: t("quotes.sim_province_required") };
+
+      const items = [{ name: t("quotes.sim_item_name"), quantity: 1, grams: Math.round(weightKg * 1000), price: Math.round(cartTotal * 100), properties: {} }];
+      const cartProducts = [{ sku, vendor, productType, tags: itemTags, collections }];
+
+      const trace = createQuoteTrace();
+      const result = await quoteShipping({ shop: session.shop, destCountry, province, city, items, shopMeta, cartProducts, trace });
+      const rates = result.finalRates.map((entry) => ({
+        name: entry.rate ? entry.rate.name : entry.name,
+        serviceCode: entry.rate ? entry.rate.serviceCode : entry.serviceCode,
+        price: entry.price,
+      }));
+      void saveQuote({
+        shop: session.shop, source: "simulator", country: destCountry, province, city,
+        resolvedCity: result.resolvedCity, resolveMethod: result.cityResolution.method,
+        departmentSlug: result.departmentSlug, items, cartWeightKg: result.cartWeightKg,
+        cartTotal: result.cartTotal, currency: shopMeta.currency || "COP", trace,
+        ratesReturned: rates.map((r) => ({ name: r.name, serviceCode: r.serviceCode, totalPrice: String(Math.round(r.price * 100)), currency: shopMeta.currency || "COP" })),
+      });
+      return {
+        simulation: {
+          rates, steps: trace.steps, decisions: trace.rules,
+          departmentName: result.departmentName, departmentSlug: result.departmentSlug,
+          resolvedCity: result.resolvedCity, resolveMethod: result.cityResolution.method,
+          pickupMismatch: result.pickupMismatchDept || null,
+        },
+      };
+    }
+
     if (intent === "create_zone") {
       const department = formData.get("department");
       if (!department) return { error: t("action.select_department") };
@@ -402,18 +491,16 @@ export const action = async ({ request }) => {
       debug("[shipping-rules] save_rate form data:", JSON.stringify(allData, null, 2));
 
       const rateId = formData.get("rateId") || undefined;
+      // Edición → zoneId (la zona no cambia). Alta desde el modal → uno o
+      // varios `department` (nombres) + `country`: la zona se crea al vuelo si
+      // no existe, para poder agregar tarifas a cualquier departamento.
       const zoneId = formData.get("zoneId");
+      const createCountry = (formData.get("country") || shopMeta.country || "CO").toUpperCase();
+      const createDepartments = formData.getAll("department").filter(Boolean);
       const pricingMode = formData.get("pricingMode") || "flat";
       const timeFrom = formData.get("timeFrom") || null;
       const timeTo = formData.get("timeTo") || null;
       const daysRaw = formData.getAll("daysOfWeek");
-
-      if (!rateId) {
-        const currentRateCount = await prisma.shippingRate.count({ where: { zoneId } });
-        if (!checkLimit(planInfo, "ratesPerZone", currentRateCount)) {
-          return { error: t("billing.limit_rates", { max: planInfo.limits.maxRatesPerZone }) };
-        }
-      }
 
       if (pricingMode === "weight_tiers" && !checkLimit(planInfo, "weightTiers", 0)) {
         return { error: t("billing.limit_feature") };
@@ -462,9 +549,9 @@ export const action = async ({ request }) => {
 
       const daysJson = daysRaw.length > 0 ? JSON.stringify(daysRaw) : "[]";
 
-      await saveRate({
-        id: rateId,
-        zoneId,
+      // Campos comunes de la tarifa. zoneId es lo único que varía cuando la
+      // misma tarifa se crea en varios departamentos (modal nueva tarifa).
+      const rateData = {
         shop: session.shop,
         name: formData.get("name"),
         serviceCode: formData.get("serviceCode"),
@@ -485,7 +572,36 @@ export const action = async ({ request }) => {
         productTags: formData.get("productTags") || "[]",
         minDeliveryDays: formData.get("minDeliveryDays"),
         maxDeliveryDays: formData.get("maxDeliveryDays"),
-      });
+        warehouseId: formData.get("warehouseId") || null,
+      };
+
+      if (rateId) {
+        // Edición: una sola tarifa (zoneId no cambia en saveRate al editar).
+        await saveRate({ id: rateId, zoneId, ...rateData });
+      } else {
+        // Alta: una tarifa por departamento elegido. Crea la zona si no existe
+        // (get-or-create por slug), respetando los límites del plan.
+        let zonesCount = await prisma.shippingZone.count({ where: { shop: session.shop } });
+        for (const dept of createDepartments) {
+          const slug = zoneSlugForCountry(createCountry, dept);
+          let zone = await prisma.shippingZone.findUnique({
+            where: { shop_slug: { shop: session.shop, slug } },
+          });
+          if (!zone) {
+            if (!checkLimit(planInfo, "zones", zonesCount)) {
+              return { error: t("billing.limit_zones", { max: planInfo.limits.maxZones }) };
+            }
+            const enabledServices = await detectEnabledServicesForDepartment(admin, dept);
+            zone = await createZone(session.shop, dept, enabledServices, createCountry);
+            zonesCount++;
+          }
+          const rateCount = await prisma.shippingRate.count({ where: { zoneId: zone.id } });
+          if (!checkLimit(planInfo, "ratesPerZone", rateCount)) {
+            return { error: t("billing.limit_rates", { max: planInfo.limits.maxRatesPerZone }) };
+          }
+          await saveRate({ zoneId: zone.id, ...rateData });
+        }
+      }
       await syncRulesToMetafield(admin, session.shop);
       return { success: true, message: t("action.rate_saved") };
     }
@@ -1017,7 +1133,11 @@ function ProFeatureNotice({ t }) {
   );
 }
 
-function RateForm({ rate, zoneId, department, onCancel, t, planLimits, enabledServices }) {
+function RateForm({ rate, zoneId, zoneSlug, createCountry, createDepartments, department, onCancel, t, planLimits, enabledServices }) {
+  // Alta desde el modal: se reciben nombres de departamento (+ país); la zona
+  // se crea al vuelo en el server. Edición: zoneId fijo.
+  const createNames = Array.isArray(createDepartments) ? createDepartments.filter(Boolean) : [];
+  const isCreate = !rate?.id;
   const allowedServices = Array.isArray(enabledServices) && enabledServices.length > 0
     ? enabledServices
     : ["mox_envio", "mox_express", "mox_pickup"];
@@ -1087,11 +1207,44 @@ function RateForm({ rate, zoneId, department, onCancel, t, planLimits, enabledSe
     return false;
   }, [rate, allowWeight, allowCart, allowSchedule, allowProductTags]);
 
+  // Preview en vivo de la bodega de origen por departamento. Se recalcula al
+  // cambiar la condición de ciudad o las ciudades seleccionadas (ciudad →
+  // depto como fallback). Display only — no afecta checkout ni routing.
+  const warehouses = useWarehouses();
+  const originPreview = useMemo(() => {
+    if (!warehouses.length) return null;
+    // Zonas objetivo: en alta, los departamentos elegidos (slug por país); en
+    // edición, la zona de la tarifa.
+    const targets = isCreate
+      ? createNames.map((name) => ({ department: name, slug: zoneSlugForCountry(createCountry || "CO", name) }))
+      : (zoneSlug ? [{ department, slug: zoneSlug }] : []);
+    if (!targets.length) return null;
+    const citiesJson = JSON.stringify(selectedCities);
+    return targets.map((z) => {
+      const cand = warehousesForRate({ cityCondition, cities: citiesJson }, z.slug, warehouses);
+      return {
+        dept: z.department,
+        label: cand.length === 1 ? cand[0].name : t("shipping.origin_any"),
+      };
+    });
+  }, [isCreate, createNames, createCountry, zoneSlug, department, warehouses, cityCondition, selectedCities, t]);
+
   return (
     <fetcher.Form method="post">
       <input type="hidden" name="_intent" value="save_rate" />
-      <input type="hidden" name="zoneId" value={zoneId} />
-      {rate?.id && <input type="hidden" name="rateId" value={rate.id} />}
+      {isCreate ? (
+        <>
+          <input type="hidden" name="country" value={createCountry || "CO"} />
+          {createNames.map((name) => (
+            <input key={name} type="hidden" name="department" value={name} />
+          ))}
+        </>
+      ) : (
+        <>
+          <input type="hidden" name="zoneId" value={zoneId} />
+          <input type="hidden" name="rateId" value={rate.id} />
+        </>
+      )}
       <input type="hidden" name="pricingMode" value={pricingMode} />
       <input type="hidden" name="weightTiers" value={JSON.stringify(weightTiers)} />
       <input type="hidden" name="cartTotalTiers" value={JSON.stringify(cartTotalTiers)} />
@@ -1151,6 +1304,31 @@ function RateForm({ rate, zoneId, department, onCancel, t, planLimits, enabledSe
             <input type="hidden" name="price" value="0" />
           )}
         </s-stack>
+
+        {warehouses.length > 0 && (
+          <div>
+            <label style={{ display: "block", fontSize: "13px", fontWeight: 600, marginBottom: "4px" }}>
+              {t("shipping.origin_warehouse")}
+            </label>
+            <select
+              name="warehouseId"
+              defaultValue={rate?.warehouseId || ""}
+              style={{ padding: "8px 12px", borderRadius: "8px", border: "1px solid #ccc", minWidth: "260px" }}
+            >
+              <option value="">{t("shipping.origin_all")}</option>
+              {warehouses.map((w) => (
+                <option key={w.id} value={w.id}>{w.name}{w.city ? ` — ${w.city}` : ""}</option>
+              ))}
+            </select>
+            <div style={{ marginTop: 4 }}>
+              <s-text variant="bodySm" tone="subdued">
+                {originPreview && originPreview.length === 1 && originPreview[0].label !== t("shipping.origin_any")
+                  ? t("shipping.origin_suggested", { name: originPreview[0].label })
+                  : t("shipping.origin_warehouse_hint")}
+              </s-text>
+            </div>
+          </div>
+        )}
 
         <div>
           <label style={{ display: "block", fontSize: "13px", fontWeight: 600, marginBottom: "4px" }}>
@@ -1293,6 +1471,29 @@ function RateForm({ rate, zoneId, department, onCancel, t, planLimits, enabledSe
         <input type="hidden" name="cities_input" value={selectedCities.join(", ")} />
         {/* Hidden: alias por ciudad (JSON) para homologación fuzzy en checkout */}
         <input type="hidden" name="city_aliases_input" value={JSON.stringify(cityAliases)} />
+
+        {/* Preview en vivo de la bodega de origen (display only) */}
+        {originPreview && (
+          <div style={{ background: "#EEEDFE", border: "1px solid #AFA9EC", borderRadius: 8, padding: "10px 12px" }}>
+            <div style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 12, fontWeight: 600, color: "#3C3489", marginBottom: originPreview.length > 1 ? 6 : 0 }}>
+              <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" width="14" height="14" fill="currentColor" aria-hidden="true">
+                <path d="M10 2 2 6v12h5v-5h6v5h5V6l-8-4Z"/>
+              </svg>
+              {t("shipping.origin_warehouse")}
+            </div>
+            {originPreview.length === 1 ? (
+              <span style={{ fontSize: 13, color: "#3C3489", fontWeight: 500 }}>{originPreview[0].label}</span>
+            ) : (
+              <div style={{ display: "flex", flexDirection: "column", gap: 2 }}>
+                {originPreview.map((p) => (
+                  <span key={p.dept} style={{ fontSize: 12, color: "#3C3489" }}>
+                    <strong>{p.dept}:</strong> {p.label}
+                  </span>
+                ))}
+              </div>
+            )}
+          </div>
+        )}
 
         <div>
           <label style={{ display: "block", fontSize: "13px", fontWeight: 600, marginBottom: "4px" }}>
@@ -1477,13 +1678,21 @@ function RateForm({ rate, zoneId, department, onCancel, t, planLimits, enabledSe
   );
 }
 
-function RateCard({ rate, zoneId, department, t, planInfo, enabledServices }) {
+function RateCard({ rate, zoneId, zoneSlug, department, t, planInfo, enabledServices }) {
   const deleteFetcher = useFetcher();
   const duplicateFetcher = useFetcher();
   const isDuplicating = duplicateFetcher.state !== "idle";
   const currency = useShopCurrency();
+  const warehouses = useWarehouses();
   const [editing, setEditing] = useState(false);
   const isDeleting = deleteFetcher.state !== "idle";
+
+  // Bodega de origen derivada por ubicación (provincia de la zona). Display
+  // only — no afecta checkout ni el routing de Shopify.
+  // Bodega de origen ASIGNADA (warehouseId funcional): en checkout solo aplican
+  // las tarifas cuyo origen resuelto coincide. null = aplica a cualquier origen.
+  const assignedWarehouse = rate.warehouseId ? warehouses.find((w) => w.id === rate.warehouseId) : null;
+  const assignedMissing = Boolean(rate.warehouseId) && !assignedWarehouse;
 
   const cities = JSON.parse(rate.cities || "[]");
   const conditionLabel =
@@ -1515,6 +1724,7 @@ function RateCard({ rate, zoneId, department, t, planInfo, enabledServices }) {
         <RateForm
           rate={rate}
           zoneId={zoneId}
+          zoneSlug={zoneSlug}
           department={department}
           onCancel={() => setEditing(false)}
           t={t}
@@ -1579,6 +1789,20 @@ function RateCard({ rate, zoneId, department, t, planInfo, enabledServices }) {
                 </span>
               );
             })}
+          </div>
+        )}
+        {warehouses.length > 0 && (
+          <div style={{ display: "flex", alignItems: "center", gap: "4px", fontSize: "12px" }}>
+            <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" width="14" height="14" fill="currentColor" aria-hidden="true" style={{ color: assignedMissing ? "#b45309" : "#6b6b68" }}>
+              <path d="M10 2 2 6v12h5v-5h6v5h5V6l-8-4Z"/>
+            </svg>
+            {assignedMissing ? (
+              <span style={{ color: "#b45309" }}>{t("shipping.origin_unavailable")}</span>
+            ) : assignedWarehouse ? (
+              <span style={{ color: "#3C3489", fontWeight: 500 }}>{assignedWarehouse.name}</span>
+            ) : (
+              <span style={{ color: "#9b9b98", fontStyle: "italic" }}>{t("shipping.origin_all")}</span>
+            )}
           </div>
         )}
         <div style={{ display: "flex", gap: "8px", flexWrap: "wrap", fontSize: "12px", color: "#666" }}>
@@ -1703,13 +1927,22 @@ function ZoneServicesEditor({ zone, enabledServices, t }) {
   );
 }
 
-function ZoneSection({ zone, t, planInfo, shopCountry, countryName }) {
+function ZoneSection({ zone, t, planInfo, shopCountry, countryName, searchQuery = "", onAddRate }) {
   const currency = useShopCurrency();
   const isForeign = zone.country && shopCountry && zone.country !== shopCountry;
   const deleteFetcher = useFetcher();
-  const [showAddRate, setShowAddRate] = useState(false);
   const isDeleting = deleteFetcher.state !== "idle";
   const canAddRate = zone.rates.length < planInfo.limits.maxRatesPerZone;
+  // Acordeón: colapsado por defecto, se ve todo al desplegar.
+  const [open, setOpen] = useState(false);
+  // Filtro de búsqueda: por nombre de tarifa o nombre del departamento.
+  const q = (searchQuery || "").trim().toLowerCase();
+  const deptMatches = !q || zone.department.toLowerCase().includes(q);
+  const visibleRates = !q
+    ? zone.rates
+    : deptMatches
+      ? zone.rates
+      : zone.rates.filter((r) => (r.name || "").toLowerCase().includes(q));
   const enabledServices = useMemo(() => {
     try {
       const parsed = JSON.parse(zone.enabledServices || "[]");
@@ -1721,55 +1954,72 @@ function ZoneSection({ zone, t, planInfo, shopCountry, countryName }) {
     }
   }, [zone.enabledServices]);
 
+  // Con búsqueda activa, ocultar el depto entero si nada matchea (depto ni
+  // rate). Va DESPUÉS de todos los hooks para no romper las reglas de hooks.
+  if (q && !deptMatches && visibleRates.length === 0) return null;
+
+  // Buscando → forzar abierto para que la tarifa que matchea sea visible.
+  const isOpen = open || !!q;
+  const deptLabel = isForeign
+    ? `${zone.department} — ${countryName ? countryName(zone.country) : zone.country}`
+    : zone.department;
+
   return (
-    <s-section heading={isForeign ? `${zone.department} — ${countryName ? countryName(zone.country) : zone.country}` : zone.department}>
-      <s-stack direction="block" gap="base">
-        {isForeign && (
-          <s-text variant="bodySm" tone="subdued">
-            {t("shipping.zone_currency_note", { currency })}
-          </s-text>
-        )}
-        <ZoneServicesEditor zone={zone} enabledServices={enabledServices} t={t} />
-        {zone.rates.map((rate) => (
-          <RateCard key={rate.id} rate={rate} zoneId={zone.id} department={zone.department} t={t} planInfo={planInfo} enabledServices={enabledServices} />
-        ))}
+    <s-section>
+      <div
+        onClick={() => setOpen((o) => !o)}
+        style={{ display: "flex", alignItems: "center", gap: 8, cursor: "pointer", padding: "4px 0" }}
+      >
+        <svg
+          xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" width="16" height="16"
+          fill="currentColor" aria-hidden="true"
+          style={{ color: "#6b6b68", transform: isOpen ? "rotate(90deg)" : "none", transition: "transform 0.1s" }}
+        >
+          <path d="M7 5l6 5-6 5V5Z" />
+        </svg>
+        <span style={{ fontWeight: 600, fontSize: 14, flex: 1 }}>{deptLabel}</span>
+        <s-badge>{t("shipping.rate_count", { n: zone.rates.length })}</s-badge>
+        <s-button
+          variant="tertiary"
+          size="small"
+          disabled={!canAddRate}
+          onClick={(e) => { e.stopPropagation(); onAddRate?.(zone); }}
+        >
+          {t("shipping.add_rate")}
+        </s-button>
+      </div>
 
-        {zone.rates.length === 0 && (
-          <s-text variant="bodySm" tone="subdued">
-            {t("shipping.no_rates_zone")}
-          </s-text>
-        )}
+      {isOpen && (
+        <s-stack direction="block" gap="base">
+          {isForeign && (
+            <s-text variant="bodySm" tone="subdued">
+              {t("shipping.zone_currency_note", { currency })}
+            </s-text>
+          )}
+          <ZoneServicesEditor zone={zone} enabledServices={enabledServices} t={t} />
+          {visibleRates.map((rate) => (
+            <RateCard key={rate.id} rate={rate} zoneId={zone.id} zoneSlug={zone.slug} department={zone.department} t={t} planInfo={planInfo} enabledServices={enabledServices} />
+          ))}
 
-        {showAddRate ? (
-          <s-card>
-            <RateForm
-              zoneId={zone.id}
-              department={zone.department}
-              onCancel={() => setShowAddRate(false)}
-              t={t}
-              planLimits={planInfo.limits}
-              enabledServices={enabledServices}
-            />
-          </s-card>
-        ) : (
-          <s-stack direction="block" gap="small">
-            <s-button disabled={!canAddRate} onClick={() => setShowAddRate(true)}>
-              {t("shipping.add_rate")}
+          {zone.rates.length === 0 && (
+            <s-text variant="bodySm" tone="subdued">
+              {t("shipping.no_rates_zone")}
+            </s-text>
+          )}
+
+          {!canAddRate && (
+            <s-text variant="bodySm" tone="subdued">{t("shipping.limit_rates_per_zone_ui")}</s-text>
+          )}
+
+          <deleteFetcher.Form method="post">
+            <input type="hidden" name="_intent" value="delete_zone" />
+            <input type="hidden" name="zoneId" value={zone.id} />
+            <s-button type="submit" variant="tertiary" tone="critical" loading={isDeleting}>
+              {t("shipping.delete_zone").replace("{{dept}}", zone.department)}
             </s-button>
-            {!canAddRate && (
-              <s-text variant="bodySm" tone="subdued">{t("shipping.limit_rates_per_zone_ui")}</s-text>
-            )}
-          </s-stack>
-        )}
-
-        <deleteFetcher.Form method="post">
-          <input type="hidden" name="_intent" value="delete_zone" />
-          <input type="hidden" name="zoneId" value={zone.id} />
-          <s-button type="submit" variant="tertiary" tone="critical" loading={isDeleting}>
-            {t("shipping.delete_zone").replace("{{dept}}", zone.department)}
-          </s-button>
-        </deleteFetcher.Form>
-      </s-stack>
+          </deleteFetcher.Form>
+        </s-stack>
+      )}
     </s-section>
   );
 }
@@ -1920,10 +2170,141 @@ function downloadCSV(content, filename) {
   URL.revokeObjectURL(url);
 }
 
+// --- New rate modal (2-step: pick departments → fill form) ---
+
+function NewRateModal({ subdivisionsByCountry, markets, countryName, t, planInfo, onClose, initialDepartments = [], initialCountry, initialStep = 1 }) {
+  const [step, setStep] = useState(initialStep);
+  const [market, setMarket] = useState(initialCountry || markets[0] || "CO");
+  // Selección por NOMBRE de departamento (no zoneId): permite agregar tarifa a
+  // cualquier departamento del catálogo aunque aún no tenga zona — se crea al
+  // guardar. La selección es de un solo mercado: cambiar de mercado la limpia.
+  const [selected, setSelected] = useState(initialDepartments);
+  const toggle = (name) =>
+    setSelected((s) => (s.includes(name) ? s.filter((x) => x !== name) : [...s, name]));
+  const changeMarket = (c) => { setMarket(c); setSelected([]); };
+  const selectedNames = selected.join(", ");
+  const multiMarket = markets.length > 1;
+  const depts = subdivisionsByCountry[market] || [];
+
+  const overlay = {
+    position: "fixed", inset: 0, background: "rgba(0,0,0,0.35)", zIndex: 100,
+    display: "flex", alignItems: "flex-start", justifyContent: "center",
+    padding: "40px 16px", overflowY: "auto",
+  };
+  const box = {
+    background: "#fff", borderRadius: 12, border: "1px solid #e3e3e3",
+    width: "100%", maxWidth: 560, flexShrink: 0,
+  };
+  const header = {
+    display: "flex", alignItems: "center", gap: 10,
+    padding: "14px 18px", borderBottom: "1px solid #e3e3e3",
+  };
+  const body = { padding: 18, maxHeight: "70vh", overflowY: "auto" };
+  const footer = {
+    padding: "12px 18px", borderTop: "1px solid #e3e3e3",
+    display: "flex", justifyContent: "flex-end", gap: 8,
+  };
+  const checkRow = {
+    display: "flex", alignItems: "center", gap: 10, padding: "9px 12px",
+    fontSize: 13, cursor: "pointer", borderBottom: "1px solid #f0f0f0",
+  };
+
+  return (
+    <div style={overlay} onClick={(e) => { if (e.target === e.currentTarget) onClose(); }}>
+      <div style={box} role="dialog" aria-modal="true">
+        <div style={header}>
+          <span style={{ fontSize: 15, fontWeight: 600, flex: 1 }}>
+            {step === 1 ? t("shipping.new_rate_step1") : t("shipping.new_rate_step2")}
+          </span>
+          <s-button variant="tertiary" size="small" onClick={onClose}>✕</s-button>
+        </div>
+
+        {step === 1 ? (
+          <>
+            <div style={body}>
+              {depts.length === 0 ? (
+                <s-text tone="subdued">{t("shipping.new_rate_no_catalog")}</s-text>
+              ) : (
+                <s-stack direction="block" gap="small">
+                  {multiMarket && (
+                    <div>
+                      <label style={{ display: "block", fontSize: 12, fontWeight: 600, marginBottom: 4 }}>
+                        {t("shipping.new_rate_market")}
+                      </label>
+                      <select
+                        value={market}
+                        onChange={(e) => changeMarket(e.target.value)}
+                        style={{ padding: "8px 12px", borderRadius: 8, border: "1px solid #ccc", minWidth: 200, fontSize: 13 }}
+                      >
+                        {markets.map((c) => (
+                          <option key={c} value={c}>{countryName ? countryName(c) : c}</option>
+                        ))}
+                      </select>
+                    </div>
+                  )}
+                  <s-text variant="bodySm" fontWeight="semibold">
+                    {t("shipping.new_rate_pick_depts")}
+                  </s-text>
+                  <div style={{ border: "1px solid #d1d0ce", borderRadius: 8, overflow: "hidden", maxHeight: 280, overflowY: "auto" }}>
+                    {depts.map((name) => (
+                      <label key={name} style={checkRow}>
+                        <input
+                          type="checkbox"
+                          checked={selected.includes(name)}
+                          onChange={() => toggle(name)}
+                          style={{ width: 15, height: 15 }}
+                        />
+                        {name}
+                      </label>
+                    ))}
+                  </div>
+                  <s-text variant="bodySm" tone="subdued">
+                    {selected.length === 0
+                      ? t("shipping.new_rate_none_selected")
+                      : t("shipping.new_rate_n_selected", { n: selected.length })}
+                  </s-text>
+                </s-stack>
+              )}
+            </div>
+            <div style={footer}>
+              <s-button variant="tertiary" onClick={onClose}>{t("shipping.cancel")}</s-button>
+              <s-button variant="primary" disabled={selected.length === 0} onClick={() => setStep(2)}>
+                {t("shipping.next")}
+              </s-button>
+            </div>
+          </>
+        ) : (
+          <div style={body}>
+            <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 14, fontSize: 12, color: "#3C3489", background: "#EEEDFE", borderRadius: 8, padding: "8px 12px" }}>
+              <span style={{ flex: 1 }}>{t("shipping.new_rate_zones_label")}: <strong>{selectedNames}</strong></span>
+              <button
+                type="button"
+                onClick={() => setStep(1)}
+                style={{ background: "none", border: "none", color: "#534AB7", cursor: "pointer", fontSize: 12, fontWeight: 500 }}
+              >
+                {t("shipping.new_rate_change")}
+              </button>
+            </div>
+            <RateForm
+              createCountry={market}
+              createDepartments={selected}
+              department={selectedNames}
+              onCancel={onClose}
+              t={t}
+              planLimits={planInfo.limits}
+              enabledServices={["mox_envio", "mox_express", "mox_pickup"]}
+            />
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
 // --- Page ---
 
 export default function ShippingRules() {
-  const { zones: allZones, defaultZones, planInfo, planSelectionUrl, billingMode, shopCountry, shopCurrency, subdivisions, cityMatchThreshold, countries, subdivisionsByCountry, shipsToCountries } = useLoaderData();
+  const { zones: allZones, defaultZones, planInfo, planSelectionUrl, billingMode, shopCountry, shopCurrency, subdivisions, cityMatchThreshold, countries, subdivisionsByCountry, subdivisionsFull, shipsToCountries, warehouses, quoteData, quoteOnlyEmpty, quoteSearch, retentionDays } = useLoaderData();
   const { locale } = useOutletContext();
   const t = createTranslator(locale);
   const zones = allZones.filter((z) => !z.slug.startsWith("_default"));
@@ -1933,6 +2314,26 @@ export default function ShippingRules() {
   const [defaultCountryTab, setDefaultCountryTab] = useState(shopCountry);
   const defaultZone = sortedDefaults.find((z) => z.country === defaultCountryTab) || sortedDefaults[0];
   const countryName = (code) => countries.find((c) => c.code === code)?.name || code;
+  // Mercados ofrecidos en el modal "nueva tarifa": países a los que la tienda
+  // vende (o el país de la tienda) + países con zonas ya creadas, filtrados a
+  // los que tienen catálogo de subdivisiones. Permite agregar tarifas a
+  // cualquier departamento del catálogo, no solo a zonas existentes.
+  const modalMarkets = (() => {
+    const zoneCountries = zones.map((z) => z.country || "CO");
+    const base = shipsToCountries && shipsToCountries.length ? shipsToCountries : [shopCountry];
+    const list = [...new Set([...base, ...zoneCountries])].filter(
+      (c) => (subdivisionsByCountry?.[c] || []).length > 0,
+    );
+    return list.length ? list : [shopCountry];
+  })();
+  // Zonas creadas agrupadas por país, para el resumen en la pestaña Zonas.
+  const zonesByCountry = (() => {
+    const map = {};
+    for (const z of zones) (map[z.country || "CO"] ||= []).push(z);
+    return Object.entries(map).sort((a, b) =>
+      a[0] === shopCountry ? -1 : b[0] === shopCountry ? 1 : a[0].localeCompare(b[0]),
+    );
+  })();
   const isPro = planInfo.plan === PLAN_PRO;
   const csvAllowed = planInfo.limits.csvImportExport === true;
   const createFetcher = useFetcher();
@@ -1942,6 +2343,7 @@ export default function ShippingRules() {
   const thresholdFetcher = useFetcher();
   const fileInputRef = useRef(null);
   const shopify = useAppBridge();
+  const [searchParams] = useSearchParams();
   const isCreating = createFetcher.state !== "idle";
   const isSyncing = syncFetcher.state !== "idle";
   const isRegistering = carrierFetcher.state !== "idle";
@@ -2018,11 +2420,24 @@ export default function ShippingRules() {
 
   const [showAddDefault, setShowAddDefault] = useState(false);
 
+  // Navegación por pestañas (estructura tipo mockup, Polaris-native): separa
+  // la gestión de tarifas de la de zonas en lugar de una página vertical larga.
+  // Pestaña inicial desde la URL (?tab) para que el filtro/paginación del log
+  // de Consultar conserven la pestaña al recargar; luego es estado de cliente.
+  const [activeTab, setActiveTab] = useState(searchParams.get("tab") || "tarifas");
+  // Búsqueda de tarifas por nombre (filtra las cards de la pestaña Tarifas).
+  const [rateSearch, setRateSearch] = useState("");
+  const rateQuery = rateSearch.trim().toLowerCase();
+  // Modal "nueva tarifa". null = cerrada. { departments, country, step } = abierta:
+  //  - botón de página → { departments: [], country, step: 1 } (elegir del catálogo)
+  //  - botón dentro de una zona → { departments: [dept], country, step: 2 } (form directo)
+  const [newRate, setNewRate] = useState(null);
+
   const canAddZone = allZones.length < planInfo.limits.maxZones;
   const canAddDefaultRate = (defaultZone?.rates.length ?? 0) < planInfo.limits.maxRatesPerZone;
 
   return (
-    <ShopMetaContext.Provider value={{ currency: shopCurrency, subdivisions }}>
+    <ShopMetaContext.Provider value={{ currency: shopCurrency, subdivisions, warehouses }}>
     <s-page
       heading={t("shipping.title")}
       subtitle={t("shipping.subtitle")}
@@ -2098,6 +2513,67 @@ export default function ShippingRules() {
         </s-section>
       )}
 
+      {/* ── TAB BAR (estructura tipo mockup) ── */}
+      <s-section>
+        <s-stack direction="inline" gap="small-200">
+          <s-button
+            variant={activeTab === "tarifas" ? "primary" : "tertiary"}
+            onClick={() => setActiveTab("tarifas")}
+          >
+            {t("shipping.tab_rates")}
+          </s-button>
+          <s-button
+            variant={activeTab === "zonas" ? "primary" : "tertiary"}
+            onClick={() => setActiveTab("zonas")}
+          >
+            {t("shipping.tab_zones")}
+          </s-button>
+          <s-button
+            variant={activeTab === "consultar" ? "primary" : "tertiary"}
+            onClick={() => setActiveTab("consultar")}
+          >
+            {t("shipping.tab_query")}
+          </s-button>
+          <s-button
+            variant={activeTab === "carga" ? "primary" : "tertiary"}
+            onClick={() => setActiveTab("carga")}
+          >
+            {t("shipping.tab_csv")}
+          </s-button>
+        </s-stack>
+      </s-section>
+
+      {activeTab === "tarifas" && (
+      <>
+      {newRate && (
+        <NewRateModal
+          subdivisionsByCountry={subdivisionsByCountry}
+          markets={modalMarkets}
+          countryName={countryName}
+          t={t}
+          planInfo={planInfo}
+          initialDepartments={newRate.departments}
+          initialCountry={newRate.country}
+          initialStep={newRate.step}
+          onClose={() => setNewRate(null)}
+        />
+      )}
+      {/* Buscador de tarifas + alta de tarifa */}
+      <s-section>
+        <div style={{ display: "flex", gap: "10px", alignItems: "center" }}>
+          <input
+            type="search"
+            value={rateSearch}
+            onChange={(e) => setRateSearch(e.target.value)}
+            placeholder={t("shipping.search_rates")}
+            style={{ flex: 1, padding: "8px 12px", borderRadius: "8px", border: "1px solid #ccc", fontSize: "13px" }}
+          />
+          <s-button variant="primary" onClick={() => setNewRate({ departments: [], country: modalMarkets[0], step: 1 })}>
+            {t("shipping.new_rate")}
+          </s-button>
+        </div>
+      </s-section>
+
       {defaultZone && (
       <s-section heading={t("shipping.default_title")}>
         <s-stack direction="block" gap="base">
@@ -2123,11 +2599,14 @@ export default function ShippingRules() {
               {t("shipping.default_country_note", { country: countryName(defaultZone.country) })}
             </s-text>
           )}
-          {defaultZone.rates.map((rate) => (
+          {defaultZone.rates
+            .filter((rate) => !rateQuery || (rate.name || "").toLowerCase().includes(rateQuery))
+            .map((rate) => (
             <RateCard
               key={rate.id}
               rate={rate}
               zoneId={defaultZone.id}
+              zoneSlug={defaultZone.slug}
               department={defaultZone.department}
               t={t}
               planInfo={planInfo}
@@ -2168,8 +2647,45 @@ export default function ShippingRules() {
       )}
 
       {zones.map((zone) => (
-        <ZoneSection key={zone.id} zone={zone} t={t} planInfo={planInfo} shopCountry={shopCountry} countryName={countryName} />
+        <ZoneSection key={zone.id} zone={zone} t={t} planInfo={planInfo} shopCountry={shopCountry} countryName={countryName} searchQuery={rateQuery} onAddRate={(z) => setNewRate({ departments: [z.department], country: z.country || shopCountry, step: 2 })} />
       ))}
+      </>
+      )}
+
+      {activeTab === "zonas" && (
+      <>
+      <s-section heading={t("shipping.zones_list_title")}>
+        {zones.length === 0 ? (
+          <s-text variant="bodySm" tone="subdued">{t("shipping.zones_list_empty")}</s-text>
+        ) : (
+          <s-stack direction="block" gap="base">
+            {zonesByCountry.map(([country, list]) => (
+              <div key={country}>
+                <s-text variant="headingSm">{countryName(country)}</s-text>
+                <div style={{ display: "flex", flexWrap: "wrap", gap: 6, marginTop: 6 }}>
+                  {list.map((z) => (
+                    <button
+                      key={z.id}
+                      type="button"
+                      onClick={() => { setRateSearch(z.department); setActiveTab("tarifas"); }}
+                      style={{
+                        display: "inline-flex", alignItems: "center", gap: 6,
+                        fontSize: 12, padding: "4px 10px", borderRadius: 20,
+                        background: "#f6f6f7", border: "1px solid #e3e3e3",
+                        color: "#1a1a18", cursor: "pointer",
+                      }}
+                      title={t("shipping.zones_list_open")}
+                    >
+                      {z.department}
+                      <span style={{ color: "#6b6b68" }}>· {t("shipping.rate_count", { n: z.rates.length })}</span>
+                    </button>
+                  ))}
+                </div>
+              </div>
+            ))}
+          </s-stack>
+        )}
+      </s-section>
 
       <s-section heading={t("shipping.add_department")}>
         <createFetcher.Form method="post">
@@ -2248,127 +2764,138 @@ export default function ShippingRules() {
         </thresholdFetcher.Form>
       </s-section>
 
-      <s-section slot="aside" heading={t("shipping.aside_title")}>
-        <s-stack direction="block" gap="large">
-          <s-stack direction="block" gap="base">
-            <s-text variant="headingSm">{t("shipping.shopify_config")}</s-text>
-            <s-box padding="base" background="bg-surface-info" borderRadius="large">
-              <s-stack direction="block" gap="small">
-                <s-text variant="bodySm" fontWeight="semibold">
-                  {t("shipping.zone_names_title")}
-                </s-text>
-                <s-text variant="bodySm">
-                  {t("shipping.zone_names_desc")}
-                </s-text>
-                <s-unordered-list>
-                  <s-list-item>
-                    <s-text variant="bodySm">{t("shipping.zone_express")}</s-text>
-                  </s-list-item>
-                  <s-list-item>
-                    <s-text variant="bodySm">{t("shipping.zone_envio")}</s-text>
-                  </s-list-item>
-                  <s-list-item>
-                    <s-text variant="bodySm">{t("shipping.zone_other")}</s-text>
-                  </s-list-item>
-                </s-unordered-list>
-                <s-text variant="bodySm" tone="caution">
-                  {t("shipping.zone_caution")}
-                </s-text>
-              </s-stack>
-            </s-box>
+      {/* Guía: cómo nombrar las zonas en Shopify (movida desde el aside) */}
+      <s-section heading={t("shipping.shopify_config")}>
+        <s-box padding="base" background="bg-surface-info" borderRadius="large">
+          <s-stack direction="block" gap="small">
+            <s-text variant="bodySm" fontWeight="semibold">{t("shipping.zone_names_title")}</s-text>
+            <s-text variant="bodySm">{t("shipping.zone_names_desc")}</s-text>
+            <s-unordered-list>
+              <s-list-item><s-text variant="bodySm">{t("shipping.zone_express")}</s-text></s-list-item>
+              <s-list-item><s-text variant="bodySm">{t("shipping.zone_envio")}</s-text></s-list-item>
+              <s-list-item><s-text variant="bodySm">{t("shipping.zone_other")}</s-text></s-list-item>
+            </s-unordered-list>
+            <s-text variant="bodySm" tone="caution">{t("shipping.zone_caution")}</s-text>
           </s-stack>
+        </s-box>
+      </s-section>
+      </>
+      )}
 
-          <details style={{ marginTop: 8 }}>
-            <summary style={{ cursor: "pointer", padding: "8px 0" }}>
-              <s-text variant="headingSm">{t("shipping.advanced_title")}</s-text>
-            </summary>
-            <s-stack direction="block" gap="base" paddingBlockStart="base">
-              <s-text variant="bodySm" tone="subdued">
-                {t("shipping.advanced_desc")}
-              </s-text>
+      {/* ── TAB: Consultar (simulador + log) ── */}
+      {activeTab === "consultar" && (
+      <QuotesView
+        t={t}
+        locale={locale}
+        basePath="/app/shipping-rules"
+        countries={countries}
+        subdivisionsByCountry={subdivisionsFull}
+        shopCountry={shopCountry}
+        shopCurrency={shopCurrency}
+        warehouses={warehouses}
+        quotes={quoteData?.quotes || []}
+        total={quoteData?.total || 0}
+        page={quoteData?.page || 1}
+        pageSize={quoteData?.pageSize || 25}
+        onlyEmpty={quoteOnlyEmpty}
+        search={quoteSearch}
+        retentionDays={retentionDays}
+      />
+      )}
 
-              <s-stack direction="block" gap="base">
-                <s-text variant="headingSm">{t("shipping.sync_title")}</s-text>
-                <s-text variant="bodySm" tone="subdued">
-                  {t("shipping.sync_desc")}
-                </s-text>
-                <syncFetcher.Form method="post">
-                  <input type="hidden" name="_intent" value="sync_metafield" />
-                  <s-button type="submit" variant="secondary" loading={isSyncing}>
-                    {isSyncing ? t("shipping.sync_loading") : t("shipping.sync_button")}
-                  </s-button>
-                </syncFetcher.Form>
-              </s-stack>
-
-              <s-stack direction="block" gap="base">
-                <s-text variant="headingSm">{t("shipping.carrier_title")}</s-text>
-                <s-text variant="bodySm" tone="subdued">
-                  {t("shipping.carrier_desc")}
-                </s-text>
-                <carrierFetcher.Form method="post">
-                  <input type="hidden" name="_intent" value="register_carrier" />
-                  <s-button type="submit" variant="secondary" loading={isRegistering}>
-                    {isRegistering ? t("shipping.carrier_loading") : t("shipping.carrier_button")}
-                  </s-button>
-                </carrierFetcher.Form>
-              </s-stack>
-            </s-stack>
-          </details>
-
-          <s-stack direction="block" gap="base">
-            <s-text variant="headingSm">{t("shipping.csv_title")}</s-text>
+      {/* ── TAB: Carga masiva (CSV) ── */}
+      {activeTab === "carga" && (
+      <s-section heading={t("shipping.csv_title")}>
+        <s-stack direction="block" gap="base">
+          <s-text variant="bodySm" tone="subdued">{t("shipping.csv_desc")}</s-text>
+          {!csvAllowed && (
             <s-text variant="bodySm" tone="subdued">
-              {t("shipping.csv_desc")}
+              {t("shipping.csv_pro_only")}{" "}
+              <s-link href="/app/billing">{t("shipping.csv_upgrade")}</s-link>
             </s-text>
-            {!csvAllowed && (
-              <s-text variant="bodySm" tone="subdued">
-                {t("shipping.csv_pro_only")}{" "}
-                <s-link href="/app/billing">{t("shipping.csv_upgrade")}</s-link>
-              </s-text>
-            )}
-            <input
-              ref={fileInputRef}
-              type="file"
-              accept=".csv"
-              onChange={handleFileSelect}
-              style={{ display: "none" }}
+          )}
+          <input
+            ref={fileInputRef}
+            type="file"
+            accept=".csv"
+            onChange={handleFileSelect}
+            style={{ display: "none" }}
+            disabled={!csvAllowed}
+          />
+          <s-stack direction="inline" gap="base">
+            <s-button
+              variant="primary"
               disabled={!csvAllowed}
-            />
-            <s-stack direction="inline" gap="base">
-              <s-button
-                variant="primary"
-                disabled={!csvAllowed}
-                onClick={() => csvAllowed && fileInputRef.current?.click()}
-                loading={isCsvLoading}
-              >
-                {isCsvLoading ? t("shipping.csv_importing") : t("shipping.csv_import")}
-              </s-button>
-              <s-button variant="secondary" disabled={!csvAllowed} onClick={handleExport}>
-                {t("shipping.csv_export")}
-              </s-button>
-              <s-button
-                variant="tertiary"
-                onClick={() => downloadCSV(generateTemplateCSV(locale), locale === "en" ? "template-shipping-rules.csv" : "plantilla-reglas-envio.csv")}
-              >
-                {t("shipping.csv_template")}
-              </s-button>
-            </s-stack>
-            <CsvHelp t={t} locale={locale} />
-            {csvFetcher.data?.importResults?.errors?.length > 0 && (
-              <div style={{
-                padding: "12px", borderRadius: "8px",
-                background: "#fff3cd", border: "1px solid #ffc107", fontSize: "12px",
-              }}>
-                <strong>{t("shipping.csv_errors").replace("{{n}}", csvFetcher.data.importResults.errors.length)}</strong>
-                <ul style={{ margin: "4px 0 0 16px", padding: 0 }}>
-                  {csvFetcher.data.importResults.errors.map((err, i) => (
-                    <li key={i}>{err}</li>
-                  ))}
-                </ul>
-              </div>
-            )}
+              onClick={() => csvAllowed && fileInputRef.current?.click()}
+              loading={isCsvLoading}
+            >
+              {isCsvLoading ? t("shipping.csv_importing") : t("shipping.csv_import")}
+            </s-button>
+            <s-button variant="secondary" disabled={!csvAllowed} onClick={handleExport}>
+              {t("shipping.csv_export")}
+            </s-button>
+            <s-button
+              variant="tertiary"
+              onClick={() => downloadCSV(generateTemplateCSV(locale), locale === "en" ? "template-shipping-rules.csv" : "plantilla-reglas-envio.csv")}
+            >
+              {t("shipping.csv_template")}
+            </s-button>
           </s-stack>
+          <CsvHelp t={t} locale={locale} />
+          {csvFetcher.data?.importResults?.errors?.length > 0 && (
+            <div style={{
+              padding: "12px", borderRadius: "8px",
+              background: "#fff3cd", border: "1px solid #ffc107", fontSize: "12px",
+            }}>
+              <strong>{t("shipping.csv_errors").replace("{{n}}", csvFetcher.data.importResults.errors.length)}</strong>
+              <ul style={{ margin: "4px 0 0 16px", padding: 0 }}>
+                {csvFetcher.data.importResults.errors.map((err, i) => (
+                  <li key={i}>{err}</li>
+                ))}
+              </ul>
+            </div>
+          )}
         </s-stack>
+      </s-section>
+      )}
+
+      <s-section slot="aside" heading={t("shipping.aside_title")}>
+        <details style={{ marginTop: 8 }}>
+          <summary style={{ cursor: "pointer", padding: "8px 0" }}>
+            <s-text variant="headingSm">{t("shipping.advanced_title")}</s-text>
+          </summary>
+          <s-stack direction="block" gap="base" paddingBlockStart="base">
+            <s-text variant="bodySm" tone="subdued">
+              {t("shipping.advanced_desc")}
+            </s-text>
+
+            <s-stack direction="block" gap="base">
+              <s-text variant="headingSm">{t("shipping.sync_title")}</s-text>
+              <s-text variant="bodySm" tone="subdued">
+                {t("shipping.sync_desc")}
+              </s-text>
+              <syncFetcher.Form method="post">
+                <input type="hidden" name="_intent" value="sync_metafield" />
+                <s-button type="submit" variant="secondary" loading={isSyncing}>
+                  {isSyncing ? t("shipping.sync_loading") : t("shipping.sync_button")}
+                </s-button>
+              </syncFetcher.Form>
+            </s-stack>
+
+            <s-stack direction="block" gap="base">
+              <s-text variant="headingSm">{t("shipping.carrier_title")}</s-text>
+              <s-text variant="bodySm" tone="subdued">
+                {t("shipping.carrier_desc")}
+              </s-text>
+              <carrierFetcher.Form method="post">
+                <input type="hidden" name="_intent" value="register_carrier" />
+                <s-button type="submit" variant="secondary" loading={isRegistering}>
+                  {isRegistering ? t("shipping.carrier_loading") : t("shipping.carrier_button")}
+                </s-button>
+              </carrierFetcher.Form>
+            </s-stack>
+          </s-stack>
+        </details>
       </s-section>
     </s-page>
     </ShopMetaContext.Provider>

@@ -155,6 +155,12 @@ model ShippingRate {
   pricingMode     String       @default("flat")  // "flat" | "weight_tiers" | "cart_total"
   weightTiers     String       @default("[]")    // JSON: [{"minKg":0,"maxKg":1,"price":12000},...]
   cartTotalTiers  String       @default("[]")    // JSON: [{"minAmount":0,"maxAmount":100000,"price":12000},...]
+  // Bodega de origen — SOLO display/organización en el admin. NO afecta el
+  // precio del checkout ni decide qué Location despacha (eso lo resuelve
+  // Shopify con Order Routing + inventario). null = derivada automáticamente
+  // de la bodega cuya provincia matchea el depto de la zona; un valor es un
+  // override del merchant = GID de una Shopify Location.
+  warehouseId     String?
   enabled       Boolean      @default(true)
   createdAt     DateTime     @default(now())
   updatedAt     DateTime     @updatedAt

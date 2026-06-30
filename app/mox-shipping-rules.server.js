@@ -270,7 +270,20 @@ export async function getRatesForDestination(shop, departmentSlug, city, departm
     });
   };
 
+  // Origen del checkout resuelto a una bodega (id de Shopify Location), o null
+  // si no se pudo resolver / no aplica (ej. simulador sin origen).
+  const originWarehouseId = opts.originWarehouseId || null;
+
   return zone.rates.filter((rate) => {
+    // Scope por origen: una rate con bodega asignada (warehouseId) solo aplica
+    // si el origen del checkout resuelve a ESA bodega. warehouseId null = la
+    // rate aplica a cualquier origen (pass-through, retrocompatible). Si el
+    // origen no se pudo resolver (originWarehouseId null) no se filtra — se
+    // muestran de más antes que ocultar una tarifa válida.
+    if (originWarehouseId && rate.warehouseId && rate.warehouseId !== originWarehouseId) {
+      traceRule(rate, false, "origin_mismatch");
+      return false;
+    }
     if (enabledServicesForZone && !enabledServicesForZone.has(rate.serviceCode)) {
       info(`[rates-filter] ${zone.slug}/${rate.name}(${rate.serviceCode}) DROP enabledServices=[${[...enabledServicesForZone].join(",")}]`);
       traceRule(rate, false, "service_disabled");
@@ -488,6 +501,7 @@ export async function saveRate({
   productTags,
   minDeliveryDays,
   maxDeliveryDays,
+  warehouseId,
 }) {
   // Normaliza valores legacy hacia el modelo nuevo al guardar: el runtime
   // sigue aceptando include_tags/exclude_tags para filas viejas no re-guardadas.
@@ -559,6 +573,8 @@ export async function saveRate({
     productTags: productTags || "[]",
     minDeliveryDays: minDays,
     maxDeliveryDays: maxDays,
+    // "" o ausente → null = bodega derivada por ubicación (no override).
+    warehouseId: warehouseId ? String(warehouseId) : null,
   };
 
   if (id) {

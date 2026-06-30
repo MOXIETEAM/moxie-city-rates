@@ -1,166 +1,15 @@
 /**
- * Quote log + simulador de tarifas.
+ * UI de Consultar (simulador de tarifas + log de cotizaciones).
  *
- * - Log: cada request del carrier service (checkout real) queda registrado con
- *   destino, carrito, decisiones por regla y rates devueltas. El merchant se
- *   autodiagnostica "¿por qué no salió mi tarifa?" sin abrir un ticket.
- * - Simulador: arma un destino + carrito ficticio y corre EXACTAMENTE el mismo
- *   pipeline del checkout (app/rate-engine.server.js), mostrando el desglose
- *   de decisiones sin necesidad de un checkout real.
+ * Presentacional puro — sin imports de servidor — para poder embeberlo dentro
+ * de la pestaña "Consultar" de shipping-rules (la lógica de loader/action vive
+ * en esa ruta). `formatMoney` y `warehousesForRate` son isomórficos.
  */
 
-import { useFetcher, useLoaderData, useOutletContext, useRouteError } from "react-router";
+import { useFetcher } from "react-router";
 import { useState } from "react";
-import { boundary } from "@shopify/shopify-app-react-router/server";
-import { authenticate } from "../shopify.server";
-import { createTranslator, getLocale } from "../utils/i18n";
-import { getShopMeta } from "../utils/shop-record.server";
-import { getQuotes, createQuoteTrace, saveQuote, QUOTE_RETENTION_DAYS } from "../utils/quote-log.server";
-import { quoteShipping } from "../rate-engine.server";
-import { getCountries, getSubdivisions, formatMoney } from "../utils/geo";
-import { error as logError } from "../utils/logger.server";
-
-export const loader = async ({ request }) => {
-  const { session } = await authenticate.admin(request);
-  const url = new URL(request.url);
-
-  const page = parseInt(url.searchParams.get("page") || "1", 10) || 1;
-  const onlyEmpty = url.searchParams.get("only_empty") === "1";
-  const search = url.searchParams.get("q") || "";
-
-  let quoteData = { total: 0, quotes: [], page: 1, pageSize: 25 };
-  try {
-    quoteData = await getQuotes(session.shop, { page, onlyEmpty, search });
-  } catch (e) {
-    logError("[quotes loader] getQuotes failed:", e?.message || e);
-  }
-
-  const shopMeta = await getShopMeta(session.shop);
-
-  // Mapa país → subdivisiones para el selector del simulador.
-  const countries = getCountries();
-  const subdivisionsByCountry = {};
-  for (const c of countries) {
-    subdivisionsByCountry[c.code] = getSubdivisions(c.code).map((s) => ({ code: s.code, name: s.name }));
-  }
-
-  return {
-    ...quoteData,
-    onlyEmpty,
-    search,
-    shopCountry: shopMeta.country || "CO",
-    shopCurrency: shopMeta.currency || "COP",
-    countries,
-    subdivisionsByCountry,
-    retentionDays: QUOTE_RETENTION_DAYS,
-  };
-};
-
-export const action = async ({ request }) => {
-  const { session } = await authenticate.admin(request);
-  const url = new URL(request.url);
-  const locale = getLocale(url.searchParams.get("locale"));
-  const t = createTranslator(locale);
-  const formData = await request.formData();
-  const intent = formData.get("_intent");
-
-  if (intent !== "simulate") return { error: "unknown intent" };
-
-  try {
-    const shopMeta = await getShopMeta(session.shop);
-    const destCountry = String(formData.get("country") || shopMeta.country || "CO");
-    const province = String(formData.get("province") || "");
-    const city = String(formData.get("city") || "");
-    const weightKg = parseFloat(formData.get("weight_kg")) || 0;
-    const cartTotal = parseFloat(formData.get("cart_total")) || 0;
-    const tagsRaw = String(formData.get("tags") || "");
-    const itemTags = tagsRaw
-      .split(",")
-      .map((s) => s.trim().toLowerCase())
-      .filter(Boolean);
-    const vendor = String(formData.get("vendor") || "").trim();
-    const sku = String(formData.get("sku") || "").trim();
-    const productType = String(formData.get("product_type") || "").trim();
-    const collectionsRaw = String(formData.get("collections") || "");
-    const collections = collectionsRaw
-      .split(",")
-      .map((s) => s.trim())
-      .filter(Boolean);
-
-    if (!province) return { error: t("quotes.sim_province_required") };
-
-    // Carrito sintético equivalente al payload del carrier service: price en
-    // centésimas, peso en gramos.
-    const items = [
-      {
-        name: t("quotes.sim_item_name"),
-        quantity: 1,
-        grams: Math.round(weightKg * 1000),
-        price: Math.round(cartTotal * 100),
-        properties: {},
-      },
-    ];
-
-    // Un cartProduct por el item sintético, con los atributos que el merchant
-    // escribió — mismo formato que arma el carrier service en checkout real.
-    const cartProducts = [{ sku, vendor, productType, tags: itemTags, collections }];
-
-    const trace = createQuoteTrace();
-    const result = await quoteShipping({
-      shop: session.shop,
-      destCountry,
-      province,
-      city,
-      items,
-      shopMeta,
-      cartProducts,
-      trace,
-    });
-
-    const rates = result.finalRates.map((entry) => ({
-      name: entry.rate ? entry.rate.name : entry.name,
-      serviceCode: entry.rate ? entry.rate.serviceCode : entry.serviceCode,
-      price: entry.price,
-    }));
-
-    // El simulador también queda en el log (source: "simulator") — sin await,
-    // el resultado se muestra de inmediato.
-    void saveQuote({
-      shop: session.shop,
-      source: "simulator",
-      country: destCountry,
-      province,
-      city,
-      resolvedCity: result.resolvedCity,
-      resolveMethod: result.cityResolution.method,
-      departmentSlug: result.departmentSlug,
-      items,
-      cartWeightKg: result.cartWeightKg,
-      cartTotal: result.cartTotal,
-      currency: shopMeta.currency || "COP",
-      trace,
-      ratesReturned: rates.map((r) => ({ name: r.name, serviceCode: r.serviceCode, totalPrice: String(Math.round(r.price * 100)), currency: shopMeta.currency || "COP" })),
-    });
-
-    return {
-      simulation: {
-        rates,
-        steps: trace.steps,
-        decisions: trace.rules,
-        departmentName: result.departmentName,
-        departmentSlug: result.departmentSlug,
-        resolvedCity: result.resolvedCity,
-        resolveMethod: result.cityResolution.method,
-        pickupMismatch: result.pickupMismatchDept || null,
-      },
-    };
-  } catch (e) {
-    logError("[quotes action] simulate failed:", e?.message || e);
-    return { error: t("quotes.sim_failed") };
-  }
-};
-
-// --- Presentación de razones de decisión ---
+import { formatMoney } from "../utils/geo";
+import { warehousesForRate } from "../utils/warehouse";
 
 const REASON_TONES = {
   selected: "success",
@@ -170,6 +19,7 @@ const REASON_TONES = {
   zone_overrides_default: "info",
   tier_gap: "warning",
   service_disabled: "warning",
+  origin_mismatch: "info",
   city_include: "critical",
   city_exclude: "critical",
   product_include: "critical",
@@ -186,9 +36,7 @@ function serviceLabel(t, code) {
 
 function DecisionsTable({ decisions, t, currency }) {
   if (!decisions?.length) {
-    return (
-      <s-text variant="bodySm" tone="subdued">{t("quotes.no_decisions")}</s-text>
-    );
+    return <s-text variant="bodySm" tone="subdued">{t("quotes.no_decisions")}</s-text>;
   }
   return (
     <div style={{ overflowX: "auto" }}>
@@ -239,14 +87,24 @@ function RatesSummary({ rates, t, currency }) {
   );
 }
 
-// --- Simulador ---
-
-function Simulator({ t, countries, subdivisionsByCountry, shopCountry, shopCurrency, locale }) {
+function Simulator({ t, countries, subdivisionsByCountry, shopCountry, shopCurrency, locale, warehouses = [] }) {
   const fetcher = useFetcher();
   const [country, setCountry] = useState(shopCountry);
   const subdivisions = subdivisionsByCountry[country] || [];
   const isLoading = fetcher.state !== "idle";
   const sim = fetcher.data?.simulation;
+
+  // Bodega de origen que resolvería este destino (ciudad → depto fallback).
+  // Display only — no afecta el routing real de Shopify.
+  let simWarehouseLabel = null;
+  if (sim && warehouses.length) {
+    const cand = warehousesForRate(
+      { cityCondition: "include", cities: JSON.stringify(sim.resolvedCity ? [sim.resolvedCity] : []) },
+      sim.departmentSlug,
+      warehouses,
+    );
+    simWarehouseLabel = cand.length === 1 ? cand[0].name : t("shipping.origin_any");
+  }
 
   return (
     <s-section heading={t("quotes.sim_title")}>
@@ -284,34 +142,10 @@ function Simulator({ t, countries, subdivisionsByCountry, shopCountry, shopCurre
                 ))}
               </select>
             </div>
-            <s-text-field
-              label={t("quotes.sim_city")}
-              name="city"
-              placeholder={t("quotes.sim_city_placeholder")}
-              style={{ minWidth: 160 }}
-            />
-            <s-text-field
-              label={t("quotes.sim_weight")}
-              name="weight_kg"
-              type="number"
-              step="any"
-              value="1"
-              style={{ maxWidth: 110 }}
-            />
-            <s-text-field
-              label={t("quotes.sim_cart_total", { currency: shopCurrency })}
-              name="cart_total"
-              type="number"
-              step="any"
-              value="0"
-              style={{ maxWidth: 140 }}
-            />
-            <s-text-field
-              label={t("quotes.sim_tags")}
-              name="tags"
-              placeholder="fragil, pesado"
-              style={{ minWidth: 160 }}
-            />
+            <s-text-field label={t("quotes.sim_city")} name="city" placeholder={t("quotes.sim_city_placeholder")} style={{ minWidth: 160 }} />
+            <s-text-field label={t("quotes.sim_weight")} name="weight_kg" type="number" step="any" value="1" style={{ maxWidth: 110 }} />
+            <s-text-field label={t("quotes.sim_cart_total", { currency: shopCurrency })} name="cart_total" type="number" step="any" value="0" style={{ maxWidth: 140 }} />
+            <s-text-field label={t("quotes.sim_tags")} name="tags" placeholder="fragil, pesado" style={{ minWidth: 160 }} />
             <s-button type="submit" variant="primary" loading={isLoading}>
               {t("quotes.sim_run")}
             </s-button>
@@ -346,6 +180,14 @@ function Simulator({ t, countries, subdivisionsByCountry, shopCountry, shopCurre
                 </s-text>
                 <RatesSummary rates={sim.rates} t={t} currency={shopCurrency} />
               </s-stack>
+              {simWarehouseLabel && (
+                <s-stack direction="inline" gap="small-200" style={{ alignItems: "center" }}>
+                  <s-icon type="store" />
+                  <s-text variant="bodySm" tone="subdued">
+                    {t("shipping.origin_warehouse")}: <strong>{simWarehouseLabel}</strong>
+                  </s-text>
+                </s-stack>
+              )}
               {sim.pickupMismatch && (
                 <s-badge tone="critical">{t("quotes.pickup_mismatch", { dept: sim.pickupMismatch })}</s-badge>
               )}
@@ -358,7 +200,14 @@ function Simulator({ t, countries, subdivisionsByCountry, shopCountry, shopCurre
   );
 }
 
-// --- Fila del log ---
+function safeParse(json, fallback) {
+  try {
+    const v = JSON.parse(json || "");
+    return v ?? fallback;
+  } catch {
+    return fallback;
+  }
+}
 
 function QuoteRow({ quote, t, currency, locale }) {
   const decisions = safeParse(quote.decisions, []);
@@ -387,7 +236,6 @@ function QuoteRow({ quote, t, currency, locale }) {
             : <s-badge tone="critical">{t("quotes.no_rates_returned")}</s-badge>}
         </span>
       </summary>
-
       <div style={{ marginTop: 12 }}>
         <s-stack direction="block" gap="base">
           {rates.length > 0 && <RatesSummary rates={rates} t={t} currency={currency} />}
@@ -403,39 +251,29 @@ function QuoteRow({ quote, t, currency, locale }) {
   );
 }
 
-function safeParse(json, fallback) {
-  try {
-    const v = JSON.parse(json || "");
-    return v ?? fallback;
-  } catch {
-    return fallback;
-  }
-}
-
-// --- Página ---
-
-export default function QuotesPage() {
-  const {
-    quotes, total, page, pageSize, onlyEmpty, search,
-    shopCountry, shopCurrency, countries, subdivisionsByCountry, retentionDays,
-  } = useLoaderData();
-  const { locale } = useOutletContext() || { locale: "es" };
-  const t = createTranslator(locale);
-
-  const totalPages = Math.max(Math.ceil(total / pageSize), 1);
-  const baseParams = new URLSearchParams();
-  baseParams.set("locale", locale);
-  if (onlyEmpty) baseParams.set("only_empty", "1");
-  if (search) baseParams.set("q", search);
-
+/**
+ * Vista completa de Consultar: simulador + log de cotizaciones. Pensada para
+ * embeberse en una pestaña. El filtro y la paginación del log navegan a
+ * `basePath` conservando `tab=consultar` para no perder la pestaña al recargar.
+ */
+export function QuotesView({
+  t, locale, basePath = "/app/shipping-rules",
+  countries, subdivisionsByCountry, shopCountry, shopCurrency, warehouses,
+  quotes, total, page, pageSize, onlyEmpty, search, retentionDays,
+}) {
+  const totalPages = Math.max(Math.ceil((total || 0) / (pageSize || 25)), 1);
   const pageLink = (p) => {
-    const params = new URLSearchParams(baseParams);
+    const params = new URLSearchParams();
+    params.set("tab", "consultar");
+    params.set("locale", locale);
+    if (onlyEmpty) params.set("only_empty", "1");
+    if (search) params.set("q", search);
     params.set("page", String(p));
-    return `/app/quotes?${params.toString()}`;
+    return `${basePath}?${params.toString()}`;
   };
 
   return (
-    <s-page heading={t("quotes.title")} subtitle={t("quotes.subtitle", { days: retentionDays })}>
+    <>
       <Simulator
         t={t}
         countries={countries}
@@ -443,11 +281,16 @@ export default function QuotesPage() {
         shopCountry={shopCountry}
         shopCurrency={shopCurrency}
         locale={locale}
+        warehouses={warehouses}
       />
 
       <s-section heading={t("quotes.log_title")}>
         <s-stack direction="block" gap="base">
-          <form method="get" action="/app/quotes">
+          {retentionDays != null && (
+            <s-text variant="bodySm" tone="subdued">{t("quotes.subtitle", { days: retentionDays })}</s-text>
+          )}
+          <form method="get" action={basePath}>
+            <input type="hidden" name="tab" value="consultar" />
             <input type="hidden" name="locale" value={locale} />
             <s-stack direction="inline" gap="base" style={{ alignItems: "flex-end", flexWrap: "wrap" }}>
               <s-text-field
@@ -477,23 +320,15 @@ export default function QuotesPage() {
 
           {totalPages > 1 && (
             <s-stack direction="inline" gap="base" style={{ alignItems: "center" }}>
-              {page > 1 && <a href={pageLink(page - 1)}>{t("quotes.prev_page")}</a>}
+              {page > 1 && <s-link href={pageLink(page - 1)}>{t("quotes.prev_page")}</s-link>}
               <s-text variant="bodySm" tone="subdued">
                 {t("quotes.page_of", { page, total: totalPages })}
               </s-text>
-              {page < totalPages && <a href={pageLink(page + 1)}>{t("quotes.next_page")}</a>}
+              {page < totalPages && <s-link href={pageLink(page + 1)}>{t("quotes.next_page")}</s-link>}
             </s-stack>
           )}
         </s-stack>
       </s-section>
-    </s-page>
+    </>
   );
 }
-
-export function ErrorBoundary() {
-  return boundary.error(useRouteError());
-}
-
-export const headers = (headersArgs) => {
-  return boundary.headers(headersArgs);
-};

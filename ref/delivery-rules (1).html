@@ -1,0 +1,1552 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Delivery Rules — Moxie</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@tabler/icons-webfont@3.19.0/dist/tabler-icons.min.css">
+<style>
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+  :root {
+    --bg: #f5f5f4;
+    --surface: #ffffff;
+    --surface-2: #f9f9f8;
+    --border: #e5e5e3;
+    --border-strong: #d1d0ce;
+    --text: #1a1a18;
+    --text-2: #6b6b68;
+    --text-3: #9b9b98;
+    --purple: #534AB7;
+    --purple-light: #EEEDFE;
+    --purple-text: #3C3489;
+    --teal: #0F6E56;
+    --teal-light: #E1F5EE;
+    --teal-text: #085041;
+    --radius-sm: 6px;
+    --radius-md: 8px;
+    --radius-lg: 12px;
+    --font: 'Inter', system-ui, sans-serif;
+  }
+
+  body {
+    font-family: var(--font);
+    background: var(--bg);
+    color: var(--text);
+    font-size: 14px;
+    line-height: 1.5;
+    min-height: 100vh;
+  }
+
+  /* ── SHELL ── */
+  .shell {
+    display: flex;
+    flex-direction: column;
+    min-height: 100vh;
+    max-width: 960px;
+    margin: 0 auto;
+    background: var(--surface);
+    border-left: 1px solid var(--border);
+    border-right: 1px solid var(--border);
+  }
+
+  /* ── TOPBAR ── */
+  .topbar {
+    height: 52px;
+    border-bottom: 1px solid var(--border);
+    padding: 0 24px;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    background: var(--surface);
+    position: sticky;
+    top: 0;
+    z-index: 10;
+  }
+  .topbar-logo {
+    font-size: 13px;
+    font-weight: 600;
+    color: var(--text);
+    display: flex;
+    align-items: center;
+    gap: 6px;
+  }
+  .topbar-logo i { color: var(--purple); font-size: 17px; }
+  .breadcrumb {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 13px;
+    color: var(--text-2);
+    margin-left: 4px;
+  }
+  .breadcrumb i { font-size: 12px; }
+  .breadcrumb strong { color: var(--text); font-weight: 500; }
+
+  /* ── TABS ── */
+  .tabs-bar {
+    display: flex;
+    border-bottom: 1px solid var(--border);
+    padding: 0 24px;
+    background: var(--surface);
+    position: sticky;
+    top: 52px;
+    z-index: 9;
+    overflow-x: auto;
+  }
+  .tab-btn {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding: 13px 16px;
+    font-size: 13px;
+    font-weight: 400;
+    color: var(--text-2);
+    border: none;
+    background: transparent;
+    cursor: pointer;
+    border-bottom: 2px solid transparent;
+    margin-bottom: -1px;
+    white-space: nowrap;
+    transition: color 0.15s;
+  }
+  .tab-btn:hover { color: var(--text); }
+  .tab-btn.active {
+    color: var(--text);
+    border-bottom-color: var(--purple);
+    font-weight: 500;
+  }
+  .tab-btn i { font-size: 15px; }
+
+  /* ── PANELS ── */
+  .panel { display: none; padding: 24px; }
+  .panel.active { display: block; }
+
+  /* ── PAGE HEADER ── */
+  .page-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: flex-start;
+    margin-bottom: 20px;
+  }
+  .page-title { font-size: 16px; font-weight: 600; }
+  .page-desc { font-size: 13px; color: var(--text-2); margin-top: 3px; }
+
+  /* ── BUTTONS ── */
+  .btn {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 7px 14px;
+    font-family: var(--font);
+    font-size: 13px;
+    font-weight: 500;
+    border-radius: var(--radius-md);
+    border: 1px solid var(--border-strong);
+    background: var(--surface);
+    color: var(--text);
+    cursor: pointer;
+    transition: background 0.1s;
+  }
+  .btn:hover { background: var(--surface-2); }
+  .btn-primary {
+    background: var(--purple);
+    color: white;
+    border-color: var(--purple);
+  }
+  .btn-primary:hover { background: #4840a8; }
+  .btn-sm { padding: 5px 10px; font-size: 12px; }
+  .btn-ghost {
+    border-color: transparent;
+    background: transparent;
+  }
+  .btn-ghost:hover { background: var(--surface-2); }
+  .btn-danger { color: #A32D2D; }
+  .btn-danger:hover { background: #FCEBEB; border-color: #F09595; }
+
+  /* ── BADGES ── */
+  .badge {
+    display: inline-flex;
+    align-items: center;
+    font-size: 11px;
+    font-weight: 500;
+    padding: 2px 8px;
+    border-radius: 20px;
+  }
+  .badge-teal { background: var(--teal-light); color: var(--teal-text); }
+  .badge-purple { background: var(--purple-light); color: var(--purple-text); }
+  .badge-gray { background: #F1EFE8; color: #444441; }
+  .badge-orange { background: #FAECE7; color: #712B13; }
+
+  /* ── CARD ── */
+  .card {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-lg);
+    margin-bottom: 10px;
+    overflow: hidden;
+  }
+  .card-header {
+    padding: 12px 16px;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    border-bottom: 1px solid var(--border);
+  }
+  .card-title { font-size: 13px; font-weight: 600; flex: 1; }
+  .card-body { padding: 14px 16px; }
+  .card-footer {
+    padding: 8px 16px;
+    border-top: 1px solid var(--border);
+    display: flex;
+    gap: 14px;
+  }
+
+  /* ── SECTION LABEL ── */
+  .section-label {
+    font-size: 11px;
+    font-weight: 600;
+    color: var(--text-3);
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    margin-bottom: 8px;
+    margin-top: 20px;
+  }
+  .section-label:first-child { margin-top: 0; }
+
+  /* ── NOTICE ── */
+  .notice {
+    padding: 10px 14px;
+    font-size: 12px;
+    border-radius: 0 var(--radius-md) var(--radius-md) 0;
+    border-left: 3px solid;
+    margin-bottom: 12px;
+  }
+  .notice-purple {
+    background: var(--purple-light);
+    color: var(--purple-text);
+    border-color: var(--purple);
+  }
+  .notice-teal {
+    background: var(--teal-light);
+    color: var(--teal-text);
+    border-color: var(--teal);
+  }
+  .notice-gray {
+    background: var(--surface-2);
+    color: var(--text-2);
+    border-color: var(--border-strong);
+    border-left: none;
+    border-radius: var(--radius-md);
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+
+  /* ── ZONE ROWS (Tab: Zonas) ── */
+  .zone-row {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 10px 0;
+    border-bottom: 1px solid var(--border);
+  }
+  .zone-row:last-child { border-bottom: none; }
+  .zone-row-name { font-size: 13px; font-weight: 500; flex: 1; }
+  .zone-row-meta { font-size: 12px; color: var(--text-2); }
+  .zone-add-row {
+    display: flex;
+    gap: 8px;
+    align-items: center;
+    padding-top: 12px;
+    border-top: 1px solid var(--border);
+    margin-top: 4px;
+  }
+
+  /* ── SELECT ── */
+  select {
+    font-family: var(--font);
+    font-size: 13px;
+    padding: 6px 10px;
+    border: 1px solid var(--border-strong);
+    border-radius: var(--radius-md);
+    background: var(--surface);
+    color: var(--text);
+    cursor: pointer;
+    outline: none;
+  }
+  select:focus { border-color: var(--purple); box-shadow: 0 0 0 3px rgba(83,74,183,0.12); }
+
+  /* ── INPUT ── */
+  input[type="text"], input[type="number"] {
+    font-family: var(--font);
+    font-size: 13px;
+    padding: 7px 10px;
+    border: 1px solid var(--border-strong);
+    border-radius: var(--radius-md);
+    background: var(--surface);
+    color: var(--text);
+    outline: none;
+    width: 100%;
+  }
+  input:focus { border-color: var(--purple); box-shadow: 0 0 0 3px rgba(83,74,183,0.12); }
+
+  /* ── MARKET BAR (Tab: Tarifas) ── */
+  .market-bar {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    background: var(--surface-2);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-lg);
+    padding: 12px 16px;
+    margin-bottom: 20px;
+  }
+  .market-bar label { font-size: 13px; color: var(--text-2); white-space: nowrap; }
+  .market-bar select { font-size: 14px; font-weight: 500; border-color: var(--border); }
+
+  /* ── RATE CARD ── */
+  .rate-tiers { padding: 10px 16px; display: flex; flex-direction: column; gap: 6px; }
+  .tier-row { display: flex; align-items: center; gap: 10px; font-size: 12px; }
+  .tier-range { color: var(--text-2); flex: 1; }
+  .tier-price { font-weight: 600; color: var(--text); }
+  .tier-free { font-weight: 600; color: var(--teal); }
+  .rate-tag { font-size: 11px; color: var(--text-2); display: flex; align-items: center; gap: 4px; }
+  .rate-tag i { font-size: 12px; }
+
+  /* ── EMPTY STATE ── */
+  .empty-state {
+    text-align: center;
+    padding: 20px;
+    border: 1px dashed var(--border-strong);
+    border-radius: var(--radius-md);
+    color: var(--text-2);
+    font-size: 13px;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 10px;
+  }
+
+  /* ── QUERY GRID (Tab: Consultar) ── */
+  .query-grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr 1fr auto;
+    gap: 10px;
+    align-items: end;
+    margin-bottom: 20px;
+  }
+  .field-label { font-size: 12px; font-weight: 500; color: var(--text-2); margin-bottom: 5px; }
+  .result-card { background: var(--teal-light); border: 1px solid #9FE1CB; border-radius: var(--radius-lg); padding: 16px; margin-bottom: 20px; }
+  .result-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin-bottom: 10px; }
+  .stat-box { background: rgba(255,255,255,0.6); border-radius: var(--radius-md); padding: 10px 14px; }
+  .stat-label { font-size: 11px; color: var(--teal-text); font-weight: 500; margin-bottom: 2px; }
+  .stat-val { font-size: 18px; font-weight: 600; color: var(--teal); }
+  .result-meta { font-size: 12px; color: var(--teal-text); }
+
+  /* ── DATA TABLE ── */
+  .table-wrap { border: 1px solid var(--border); border-radius: var(--radius-md); overflow: auto; }
+  table { width: 100%; border-collapse: collapse; font-size: 12px; }
+  th {
+    text-align: left;
+    padding: 9px 12px;
+    font-size: 11px;
+    font-weight: 600;
+    color: var(--text-2);
+    background: var(--surface-2);
+    border-bottom: 1px solid var(--border);
+    white-space: nowrap;
+  }
+  td { padding: 9px 12px; border-bottom: 1px solid var(--border); color: var(--text); vertical-align: middle; }
+  tr:last-child td { border-bottom: none; }
+  tr:hover td { background: var(--surface-2); }
+
+  /* ── CSV TABLE (Tab: Carga masiva) ── */
+  .col-table th { font-weight: 600; }
+  code {
+    font-family: 'Menlo', 'Consolas', monospace;
+    font-size: 11px;
+    background: var(--surface-2);
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    padding: 1px 5px;
+    color: var(--text);
+  }
+  .req { color: #A32D2D; font-weight: 600; }
+  .opt { color: var(--text-3); }
+  .col-desc { font-size: 12px; color: var(--text-2); }
+  .col-ex { font-size: 11px; margin-top: 3px; color: var(--text-3); }
+
+  /* ── CHIPS ── */
+  .chips { display: flex; gap: 4px; flex-wrap: wrap; }
+  .chip {
+    font-size: 11px;
+    padding: 2px 7px;
+    border-radius: 20px;
+    background: var(--surface-2);
+    color: var(--text-2);
+    border: 1px solid var(--border);
+  }
+
+  /* ── DIVIDER ── */
+  .divider { border: none; border-top: 1px solid var(--border); margin: 20px 0; }
+
+  /* ── STEP LIST ── */
+  .step-list { display: flex; flex-direction: column; gap: 8px; }
+  .step-item {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    font-size: 13px;
+    color: var(--text-2);
+  }
+  .step-num {
+    width: 22px;
+    height: 22px;
+    border-radius: 50%;
+    background: var(--purple-light);
+    color: var(--purple);
+    font-size: 11px;
+    font-weight: 700;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    flex-shrink: 0;
+  }
+
+  /* ── DEPT GROUP (Tarifas agrupadas) ── */
+  .dept-group { margin-bottom: 20px; }
+  .dept-header {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 8px 0 8px 2px;
+    border-bottom: 1px solid var(--border);
+    margin-bottom: 10px;
+  }
+  .dept-name { font-size: 13px; font-weight: 600; color: var(--text); }
+  .dept-rates { padding-left: 16px; border-left: 2px solid var(--border); }
+
+  .dept-check-row {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 9px 14px;
+    font-size: 13px;
+    cursor: pointer;
+    border-bottom: 1px solid var(--border);
+    color: var(--text);
+    transition: background 0.1s;
+  }
+  .dept-check-row:last-child { border-bottom: none; }
+  .dept-check-row:hover { background: var(--surface-2); }
+  .dept-check-row input[type=checkbox] { accent-color: var(--purple); width:15px; height:15px; flex-shrink:0; cursor:pointer; }
+
+  /* ── MODAL ── */
+  .modal-overlay {
+    display: none;
+    position: fixed;
+    inset: 0;
+    background: rgba(0,0,0,0.35);
+    z-index: 100;
+    align-items: flex-start;
+    justify-content: center;
+    padding: 40px 16px 40px;
+    overflow-y: auto;
+  }
+  .modal-overlay.open { display: flex; }
+  .modal {
+    background: var(--surface);
+    border-radius: var(--radius-lg);
+    border: 1px solid var(--border);
+    width: 100%;
+    max-width: 560px;
+    flex-shrink: 0;
+  }
+  .modal-header {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 16px 20px;
+    border-bottom: 1px solid var(--border);
+  }
+  .modal-title { font-size: 15px; font-weight: 600; flex: 1; }
+  .modal-body { padding: 20px; }
+  .modal-footer {
+    padding: 14px 20px;
+    border-top: 1px solid var(--border);
+    display: flex;
+    justify-content: flex-end;
+    gap: 8px;
+  }
+  .form-field { margin-bottom: 16px; }
+  .form-label {
+    display: block;
+    font-size: 12px;
+    font-weight: 600;
+    color: var(--text);
+    margin-bottom: 5px;
+  }
+  .form-label .req { color: #A32D2D; font-weight: 700; margin-left: 2px; }
+  .form-hint { font-size: 11px; color: var(--text-3); margin-top: 4px; line-height: 1.4; }
+  .radio-group { display: flex; gap: 18px; flex-wrap: wrap; }
+  .radio-group label { display: flex; align-items: center; gap: 6px; font-size: 13px; cursor: pointer; }
+  .radio-group input[type=radio] { accent-color: var(--purple); cursor: pointer; }
+  .check-group { display: flex; gap: 12px; flex-wrap: wrap; }
+  .check-group label { display: flex; align-items: center; gap: 5px; font-size: 13px; cursor: pointer; }
+  .check-group input[type=checkbox] { accent-color: var(--purple); cursor: pointer; }
+  .two-inputs { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+  .time-row { display: flex; align-items: center; gap: 8px; }
+  .time-row span { font-size: 13px; color: var(--text-2); }
+  .section-divider {
+    font-size: 11px;
+    font-weight: 600;
+    color: var(--text-3);
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    padding: 14px 0 10px;
+    border-top: 1px solid var(--border);
+    margin-top: 4px;
+  }
+  .info-box {
+    background: var(--surface-2);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-md);
+    padding: 12px 14px;
+    font-size: 12px;
+    color: var(--text-2);
+    line-height: 1.6;
+  }
+  .info-box strong { color: var(--text); }
+  .step-indicator {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    font-size: 12px;
+    color: var(--text-3);
+    margin-bottom: 16px;
+  }
+  .step-dot {
+    width: 20px; height: 20px;
+    border-radius: 50%;
+    font-size: 11px; font-weight: 700;
+    display: flex; align-items: center; justify-content: center;
+    flex-shrink: 0;
+  }
+  .step-dot.done { background: var(--teal-light); color: var(--teal); }
+  .step-dot.active { background: var(--purple); color: white; }
+  .step-dot.pending { background: var(--surface-2); color: var(--text-3); border: 1px solid var(--border); }
+  .step-line { flex: 1; height: 1px; background: var(--border); }
+
+  .dept-select-grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 8px;
+    margin-top: 4px;
+  }
+  .dept-option {
+    padding: 10px 14px;
+    border: 1px solid var(--border);
+    border-radius: var(--radius-md);
+    font-size: 13px;
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    color: var(--text);
+    background: var(--surface);
+    transition: border-color 0.1s, background 0.1s;
+  }
+  .dept-option:hover { border-color: var(--purple); background: var(--purple-light); }
+  .dept-option.selected { border-color: var(--purple); background: var(--purple-light); color: var(--purple-text); font-weight: 500; }
+
+  /* ── WAREHOUSE CONTEXT CHIP ── */
+  .warehouse-context-chip {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 12px;
+    font-weight: 500;
+    color: var(--purple-text);
+    background: var(--purple-light);
+    border: 1px solid #AFA9EC;
+    border-radius: 20px;
+    padding: 3px 12px;
+    margin-bottom: 16px;
+  }
+
+  /* ── WAREHOUSE BAR ── */
+  .warehouse-bar {
+    background: var(--surface-2);
+    border-bottom: 1px solid var(--border);
+    padding: 0 24px;
+    height: 44px;
+    display: flex;
+    align-items: center;
+    gap: 10px;
+  }
+  .warehouse-bar label { font-size: 12px; color: var(--text-3); white-space: nowrap; font-weight: 500; text-transform: uppercase; letter-spacing: 0.04em; }
+  .warehouse-select {
+    font-family: var(--font);
+    font-size: 13px;
+    font-weight: 500;
+    border: 1px solid var(--border-strong);
+    border-radius: var(--radius-md);
+    background: var(--surface);
+    color: var(--text);
+    padding: 4px 10px;
+    cursor: pointer;
+    outline: none;
+    min-width: 200px;
+  }
+  .warehouse-select:focus { border-color: var(--purple); }
+  .tab-group-label {
+    font-size: 10px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    color: var(--text-3);
+    padding: 0 6px;
+    align-self: center;
+  }
+
+  @media (max-width: 640px) {
+    .query-grid { grid-template-columns: 1fr 1fr; }
+    .result-grid { grid-template-columns: 1fr; }
+    .panel { padding: 16px; }
+    .dept-select-grid { grid-template-columns: 1fr; }
+    .two-inputs { grid-template-columns: 1fr; }
+  }
+</style>
+</head>
+<body>
+
+<div class="shell">
+
+  <!-- TOPBAR -->
+  <div class="topbar">
+    <div class="topbar-logo">
+      <i class="ti ti-truck"></i>
+      Delivery Rules
+    </div>
+    <div class="breadcrumb">
+      <i class="ti ti-chevron-right"></i>
+      <strong id="breadcrumb-label">Zonas</strong>
+    </div>
+  </div>
+
+  <!-- WAREHOUSE BAR -->
+  <div class="warehouse-bar">
+    <i class="ti ti-building-warehouse" style="font-size:16px; color:var(--text-3)"></i>
+    <label for="warehouse-select">Bodega origen:</label>
+    <select id="warehouse-select" class="warehouse-select" onchange="onWarehouseChange(this)">
+      <option value="bog" selected>📦 Bodega Bogotá — Calle 72 #10-07</option>
+      <option value="med">📦 Bodega Medellín — Carrera 43A #1-50</option>
+      <option value="cal">📦 Bodega Cali — Av. Roosevelt #33-08</option>
+    </select>
+    <div style="margin-left:auto; display:flex; gap:4px;">
+      <button class="btn btn-sm btn-ghost" onclick="switchTab(2)"><i class="ti ti-search"></i>Consultar</button>
+      <button class="btn btn-sm btn-ghost" onclick="switchTab(3)"><i class="ti ti-upload"></i>Carga masiva</button>
+    </div>
+  </div>
+
+  <!-- TABS -->
+  <div class="tabs-bar">
+    <button class="tab-btn active" onclick="switchTab(0)">
+      <i class="ti ti-map-pin"></i>Zonas
+    </button>
+    <button class="tab-btn" onclick="switchTab(1)">
+      <i class="ti ti-currency-dollar"></i>Tarifas
+    </button>
+  </div>
+
+  <!-- ══════════════════════════════════════════
+       TAB 0: ZONAS
+  ══════════════════════════════════════════ -->
+  <div class="panel active" id="panel-0">
+    <div class="page-header">
+      <div>
+        <div class="page-title">Zonas de envío</div>
+        <div class="page-desc">Cada zona agrupa uno o más países que comparten las mismas reglas de envío.</div>
+      </div>
+      <button class="btn btn-primary btn-sm" onclick="showAddZone()"><i class="ti ti-plus"></i>Agregar zona de envío</button>
+    </div>
+    <div class="warehouse-context-chip">
+      <i class="ti ti-building-warehouse" style="font-size:14px"></i>
+      <span id="zonas-warehouse-label">Bodega Bogotá — Calle 72 #10-07</span>
+    </div>
+
+    <!-- Zona 1: LATAM principal -->
+    <div class="card">
+      <div class="card-header">
+        <span class="card-title">Colombia y México</span>
+        <span class="badge badge-teal">Mercado principal</span>
+        <div style="margin-left:auto; display:flex; gap:4px;">
+          <button class="btn btn-sm btn-ghost"><i class="ti ti-edit"></i>Editar</button>
+          <button class="btn btn-sm btn-ghost"><i class="ti ti-copy"></i>Duplicar</button>
+          <button class="btn btn-sm btn-ghost btn-danger"><i class="ti ti-trash"></i></button>
+        </div>
+      </div>
+      <div class="card-body" style="padding: 12px 16px;">
+        <div style="display:flex; gap:8px; flex-wrap:wrap;">
+          <span class="chip" style="font-size:12px; padding:4px 10px;">🇨🇴 Colombia</span>
+          <span class="chip" style="font-size:12px; padding:4px 10px;">🇲🇽 México</span>
+        </div>
+      </div>
+    </div>
+
+    <!-- Zona 2: LATAM Sur -->
+    <div class="card">
+      <div class="card-header">
+        <span class="card-title">LATAM Sur</span>
+        <span class="badge badge-purple">Markets</span>
+        <div style="margin-left:auto; display:flex; gap:4px;">
+          <button class="btn btn-sm btn-ghost"><i class="ti ti-edit"></i>Editar</button>
+          <button class="btn btn-sm btn-ghost"><i class="ti ti-copy"></i>Duplicar</button>
+          <button class="btn btn-sm btn-ghost btn-danger"><i class="ti ti-trash"></i></button>
+        </div>
+      </div>
+      <div class="card-body" style="padding: 12px 16px;">
+        <div style="display:flex; gap:8px; flex-wrap:wrap;">
+          <span class="chip" style="font-size:12px; padding:4px 10px;">🇦🇷 Argentina</span>
+          <span class="chip" style="font-size:12px; padding:4px 10px;">🇨🇱 Chile</span>
+          <span class="chip" style="font-size:12px; padding:4px 10px;">🇵🇪 Perú</span>
+        </div>
+      </div>
+    </div>
+
+    <!-- Formulario nueva zona (oculto) -->
+    <div id="add-zone-form" style="display:none; margin-top:4px;">
+      <div class="card">
+        <div class="card-header">
+          <span class="card-title">Nueva zona de envío</span>
+          <button class="btn btn-sm btn-ghost" style="margin-left:auto" onclick="hideAddZone()"><i class="ti ti-x"></i></button>
+        </div>
+        <div class="card-body">
+          <div style="margin-bottom:14px;">
+            <div class="field-label" style="margin-bottom:5px;">Nombre de la zona</div>
+            <input type="text" placeholder="Ej: LATAM Norte, Europa, Resto del mundo..." style="max-width:400px;">
+          </div>
+          <div style="display:grid; grid-template-columns:1fr 1fr; gap:12px; margin-bottom:14px;">
+            <div>
+              <div class="field-label" style="margin-bottom:5px;">Países incluidos</div>
+              <select style="width:100%">
+                <option value="">Seleccionar país...</option>
+                <option>🇧🇷 Brasil</option>
+                <option>🇦🇷 Argentina</option>
+                <option>🇨🇱 Chile</option>
+                <option>🇵🇪 Perú</option>
+                <option>🇪🇨 Ecuador</option>
+                <option>🇺🇸 Estados Unidos</option>
+                <option>🇪🇸 España</option>
+              </select>
+            </div>
+            <div>
+              <div class="field-label" style="margin-bottom:5px;">Tipo de mercado</div>
+              <select style="width:100%">
+                <option>Mercado principal</option>
+                <option>Shopify Markets</option>
+              </select>
+            </div>
+          </div>
+          <div style="display:flex; gap:8px; justify-content:flex-end;">
+            <button class="btn btn-sm" onclick="hideAddZone()">Cancelar</button>
+            <button class="btn btn-sm btn-primary"><i class="ti ti-check"></i>Guardar zona</button>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div class="notice notice-gray" style="margin-top:12px;">
+      <i class="ti ti-info-circle" style="font-size:16px; flex-shrink:0"></i>
+      El nombre de cada zona en Shopify Admin determina si se cataloga como <strong>Envío Express</strong>, <strong>Envío Estándar</strong> o se ignora.
+      <a href="#" style="color:var(--purple); font-size:12px; margin-left:auto; white-space:nowrap; text-decoration:none; font-weight:500">Ver guía →</a>
+    </div>
+  </div>
+
+  <!-- ══════════════════════════════════════════
+       TAB 1: TARIFAS
+  ══════════════════════════════════════════ -->
+  <div class="panel" id="panel-1">
+    <div class="page-header">
+      <div>
+        <div class="page-title">Tarifas</div>
+        <div class="page-desc">Define las tarifas que aplican a cada zona por mercado.</div>
+      </div>
+      <button class="btn btn-primary btn-sm" onclick="openModal()"><i class="ti ti-plus"></i>Nueva tarifa</button>
+    </div>
+    <div class="warehouse-context-chip">
+      <i class="ti ti-building-warehouse" style="font-size:14px"></i>
+      <span id="tarifas-warehouse-label">Bodega Bogotá — Calle 72 #10-07</span>
+    </div>
+
+    <!-- Market + search bar -->
+    <div class="market-bar" style="gap:12px;">
+      <i class="ti ti-world" style="font-size:17px; color:var(--text-2); flex-shrink:0"></i>
+      <label for="market-select" style="white-space:nowrap">Mercado:</label>
+      <select id="market-select" onchange="switchMarket(this.value)" style="flex-shrink:0">
+        <option value="co">🇨🇴 Colombia</option>
+        <option value="mx">🇲🇽 México</option>
+      </select>
+      <div style="flex:1; position:relative; margin-left:8px;">
+        <i class="ti ti-search" style="position:absolute; left:9px; top:50%; transform:translateY(-50%); font-size:14px; color:var(--text-3); pointer-events:none"></i>
+        <input type="text" id="rate-search" placeholder="Buscar tarifa por nombre..." oninput="filterRates()" style="width:100%; padding-left:32px;">
+      </div>
+    </div>
+
+    <!-- No results message -->
+    <div id="no-results" style="display:none; text-align:center; padding:24px; color:var(--text-3); font-size:13px;">
+      <i class="ti ti-search" style="font-size:22px; display:block; margin-bottom:6px;"></i>
+      Sin resultados para esta búsqueda.
+    </div>
+
+    <!-- Colombia rates -->
+    <div id="rates-co">
+
+      <!-- FALLBACK — siempre primero, no entra en el sort -->
+      <div class="section-label">Fallback</div>
+      <div class="notice notice-purple" style="margin-bottom:10px;">Aplica cuando el destino no tiene zona específica configurada.</div>
+      <div class="card rate-card" data-name="fallback rate" data-fallback="true">
+        <div class="card-header">
+          <span class="card-title">Fallback Rate</span>
+          <span class="badge badge-teal">Estándar</span>
+          <span class="badge badge-gray">Por monto</span>
+          <div style="margin-left:auto; display:flex; gap:4px;">
+            <button class="btn btn-sm btn-ghost"><i class="ti ti-edit"></i>Editar</button>
+            <button class="btn btn-sm btn-ghost"><i class="ti ti-copy"></i>Duplicar</button>
+            <button class="btn btn-sm btn-ghost btn-danger"><i class="ti ti-trash"></i></button>
+          </div>
+        </div>
+        <div class="rate-tiers">
+          <div class="tier-row"><span class="tier-range">US$0 – US$100,000</span><span class="tier-price">US$15,000</span></div>
+          <div class="tier-row"><span class="tier-range">US$100,000 – US$200,000</span><span class="tier-price">US$10,000</span></div>
+          <div class="tier-row"><span class="tier-range">US$200,000 en adelante</span><span class="tier-free">Gratis</span></div>
+        </div>
+        <div class="card-footer">
+          <span class="rate-tag"><i class="ti ti-map-pin"></i>Solo: Medellín</span>
+          <span class="rate-tag"><i class="ti ti-tag"></i>Excluye: fragil, heavy</span>
+          <span class="rate-tag"><i class="ti ti-clock"></i>3–7 días</span>
+        </div>
+      </div>
+
+      <!-- TARIFAS agrupadas por departamento -->
+      <div class="section-label" id="rates-co-label" style="margin-top:20px;">Tarifas por departamento</div>
+      <div id="rates-co-list">
+
+        <!-- Antioquia -->
+        <div class="dept-group" data-dept="antioquia medellín">
+          <div class="dept-header">
+            <i class="ti ti-map-pin" style="font-size:14px; color:var(--text-3)"></i>
+            <span class="dept-name">Antioquia — Medellín</span>
+            <button class="btn btn-sm btn-ghost" style="margin-left:auto; font-size:12px;" onclick="openModal()"><i class="ti ti-plus"></i>Agregar tarifa</button>
+          </div>
+          <div class="dept-rates">
+            <div class="card rate-card" data-name="medellín express" style="margin-bottom:0;">
+              <div class="card-header">
+                <span class="card-title">Medellín Express</span>
+                <span class="badge badge-purple">Express</span>
+                <span class="badge badge-gray">Precio fijo</span>
+                <div style="margin-left:auto; display:flex; gap:4px;">
+                  <button class="btn btn-sm btn-ghost"><i class="ti ti-edit"></i>Editar</button>
+                  <button class="btn btn-sm btn-ghost"><i class="ti ti-copy"></i>Duplicar</button>
+                  <button class="btn btn-sm btn-ghost btn-danger"><i class="ti ti-trash"></i></button>
+                </div>
+              </div>
+              <div class="rate-tiers">
+                <div class="tier-row"><span class="tier-range">Cualquier monto</span><span class="tier-price">US$18,000</span></div>
+              </div>
+              <div class="card-footer">
+                <span class="rate-tag"><i class="ti ti-clock"></i>1–2 días</span>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- Cundinamarca -->
+        <div class="dept-group" data-dept="cundinamarca bogotá">
+          <div class="dept-header">
+            <i class="ti ti-map-pin" style="font-size:14px; color:var(--text-3)"></i>
+            <span class="dept-name">Cundinamarca — Bogotá D.C.</span>
+            <button class="btn btn-sm btn-ghost" style="margin-left:auto; font-size:12px;" onclick="openModal()"><i class="ti ti-plus"></i>Agregar tarifa</button>
+          </div>
+          <div class="dept-rates">
+            <div class="card rate-card" data-name="bogotá económico" style="margin-bottom:8px;">
+              <div class="card-header">
+                <span class="card-title">Bogotá Económico</span>
+                <span class="badge badge-teal">Estándar</span>
+                <span class="badge badge-gray">Por monto</span>
+                <div style="margin-left:auto; display:flex; gap:4px;">
+                  <button class="btn btn-sm btn-ghost"><i class="ti ti-edit"></i>Editar</button>
+                  <button class="btn btn-sm btn-ghost"><i class="ti ti-copy"></i>Duplicar</button>
+                  <button class="btn btn-sm btn-ghost btn-danger"><i class="ti ti-trash"></i></button>
+                </div>
+              </div>
+              <div class="rate-tiers">
+                <div class="tier-row"><span class="tier-range">US$0 – US$150,000</span><span class="tier-price">US$12,000</span></div>
+                <div class="tier-row"><span class="tier-range">US$150,000 en adelante</span><span class="tier-free">Gratis</span></div>
+              </div>
+              <div class="card-footer">
+                <span class="rate-tag"><i class="ti ti-clock"></i>3–5 días</span>
+              </div>
+            </div>
+            <div class="card rate-card" data-name="bogotá express" style="margin-bottom:0;">
+              <div class="card-header">
+                <span class="card-title">Bogotá Express</span>
+                <span class="badge badge-purple">Express</span>
+                <span class="badge badge-gray">Precio fijo</span>
+                <div style="margin-left:auto; display:flex; gap:4px;">
+                  <button class="btn btn-sm btn-ghost"><i class="ti ti-edit"></i>Editar</button>
+                  <button class="btn btn-sm btn-ghost"><i class="ti ti-copy"></i>Duplicar</button>
+                  <button class="btn btn-sm btn-ghost btn-danger"><i class="ti ti-trash"></i></button>
+                </div>
+              </div>
+              <div class="rate-tiers">
+                <div class="tier-row"><span class="tier-range">Cualquier monto</span><span class="tier-price">US$20,000</span></div>
+              </div>
+              <div class="card-footer">
+                <span class="rate-tag"><i class="ti ti-clock"></i>1–2 días</span>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- Resto del país -->
+        <div class="dept-group" data-dept="resto del país nacional">
+          <div class="dept-header">
+            <i class="ti ti-map-pin" style="font-size:14px; color:var(--text-3)"></i>
+            <span class="dept-name">Resto del país</span>
+            <button class="btn btn-sm btn-ghost" style="margin-left:auto; font-size:12px;" onclick="openModal()"><i class="ti ti-plus"></i>Agregar tarifa</button>
+          </div>
+          <div class="dept-rates">
+            <div class="card rate-card" data-name="resto del país económico" style="margin-bottom:0;">
+              <div class="card-header">
+                <span class="card-title">Resto del país — Económico</span>
+                <span class="badge badge-teal">Estándar</span>
+                <span class="badge badge-gray">Por monto</span>
+                <div style="margin-left:auto; display:flex; gap:4px;">
+                  <button class="btn btn-sm btn-ghost"><i class="ti ti-edit"></i>Editar</button>
+                  <button class="btn btn-sm btn-ghost"><i class="ti ti-copy"></i>Duplicar</button>
+                  <button class="btn btn-sm btn-ghost btn-danger"><i class="ti ti-trash"></i></button>
+                </div>
+              </div>
+              <div class="rate-tiers">
+                <div class="tier-row"><span class="tier-range">US$0 – US$200,000</span><span class="tier-price">US$8,000</span></div>
+                <div class="tier-row"><span class="tier-range">US$200,000 en adelante</span><span class="tier-free">Gratis</span></div>
+              </div>
+              <div class="card-footer">
+                <span class="rate-tag"><i class="ti ti-clock"></i>7–10 días</span>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- Valle del Cauca -->
+        <div class="dept-group" data-dept="valle del cauca cali">
+          <div class="dept-header">
+            <i class="ti ti-map-pin" style="font-size:14px; color:var(--text-3)"></i>
+            <span class="dept-name">Valle del Cauca — Cali</span>
+            <button class="btn btn-sm btn-ghost" style="margin-left:auto; font-size:12px;" onclick="openModal()"><i class="ti ti-plus"></i>Agregar tarifa</button>
+          </div>
+          <div class="dept-rates">
+            <div class="card rate-card" data-name="cali estándar" style="margin-bottom:0;">
+              <div class="card-header">
+                <span class="card-title">Cali Estándar</span>
+                <span class="badge badge-teal">Estándar</span>
+                <span class="badge badge-gray">Por monto</span>
+                <div style="margin-left:auto; display:flex; gap:4px;">
+                  <button class="btn btn-sm btn-ghost"><i class="ti ti-edit"></i>Editar</button>
+                  <button class="btn btn-sm btn-ghost"><i class="ti ti-copy"></i>Duplicar</button>
+                  <button class="btn btn-sm btn-ghost btn-danger"><i class="ti ti-trash"></i></button>
+                </div>
+              </div>
+              <div class="rate-tiers">
+                <div class="tier-row"><span class="tier-range">US$0 – US$150,000</span><span class="tier-price">US$12,000</span></div>
+                <div class="tier-row"><span class="tier-range">US$150,000 en adelante</span><span class="tier-free">Gratis</span></div>
+              </div>
+              <div class="card-footer">
+                <span class="rate-tag"><i class="ti ti-clock"></i>4–6 días</span>
+              </div>
+            </div>
+          </div>
+        </div>
+
+      </div><!-- /rates-co-list -->
+    </div>
+
+    <!-- México rates -->
+    <div id="rates-mx" style="display:none">
+      <div class="section-label">Tarifas por estado</div>
+      <div class="empty-state">
+        <i class="ti ti-circle-dashed" style="font-size:24px; color:var(--text-3)"></i>
+        Sin tarifas configuradas para este mercado.
+        <button class="btn btn-sm btn-primary"><i class="ti ti-plus"></i>Agregar tarifa</button>
+      </div>
+      <div class="notice notice-gray" style="margin-top:16px;">
+        <i class="ti ti-info-circle" style="font-size:16px; flex-shrink:0"></i>
+        Los precios en México se cobran en USD y Shopify los convierte automáticamente si usas Markets.
+      </div>
+    </div>
+  </div>
+
+  <!-- ══════════════════════════════════════════
+       TAB 2: CONSULTAR
+  ══════════════════════════════════════════ -->
+  <div class="panel" id="panel-2">
+    <div class="page-header">
+      <div>
+        <div class="page-title">Consultar tarifas</div>
+        <div class="page-desc">Simula qué tarifa aplica para un destino y monto de carrito.</div>
+      </div>
+    </div>
+
+    <div class="query-grid">
+      <div>
+        <div class="field-label">Mercado</div>
+        <select style="width:100%">
+          <option>🇨🇴 Colombia</option>
+          <option>🇲🇽 México</option>
+        </select>
+      </div>
+      <div>
+        <div class="field-label">Bodega origen</div>
+        <select style="width:100%">
+          <option>Bodega Bogotá</option>
+          <option>Bodega Medellín</option>
+          <option>Bodega Cali</option>
+        </select>
+      </div>
+      <div>
+        <div class="field-label">Ciudad / Departamento</div>
+        <input type="text" placeholder="Ej: Medellín">
+      </div>
+      <div>
+        <button class="btn btn-primary" style="width:100%"><i class="ti ti-search"></i>Consultar</button>
+      </div>
+    </div>
+
+    <div class="result-card">
+      <div style="display:flex; align-items:center; gap:8px; margin-bottom:12px;">
+        <i class="ti ti-circle-check" style="font-size:18px; color:var(--teal)"></i>
+        <span style="font-size:13px; font-weight:600; color:var(--teal-text)">Tarifa encontrada — Medellín · US$150,000</span>
+      </div>
+      <div class="result-grid">
+        <div class="stat-box">
+          <div class="stat-label">Zona aplicada</div>
+          <div class="stat-val" style="font-size:15px; color:var(--teal-text)">Fallback Rate</div>
+        </div>
+        <div class="stat-box">
+          <div class="stat-label">Precio de envío</div>
+          <div class="stat-val">US$10,000</div>
+        </div>
+      </div>
+      <div class="result-meta">
+        Rango aplicado: US$100,000 – US$200,000 · Tipo: Envío estándar · Coincidencia de ciudad: 92% ("Medellin" → "Medellín")
+      </div>
+    </div>
+
+    <div class="section-label">Todas las tarifas activas</div>
+    <div class="table-wrap">
+      <table>
+        <thead>
+          <tr>
+            <th>Nombre</th>
+            <th>Zona</th>
+            <th>Mercado</th>
+            <th>Tipo</th>
+            <th>Rangos</th>
+            <th>Restricciones</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><strong>Fallback Rate</strong></td>
+            <td>Fallback</td>
+            <td>🇨🇴 Colombia</td>
+            <td><span class="badge badge-teal">Estándar</span></td>
+            <td>3 rangos</td>
+            <td>
+              <div class="chips">
+                <span class="chip">Solo MEDELLIN</span>
+                <span class="chip">− fragil</span>
+                <span class="chip">− heavy</span>
+              </div>
+            </td>
+          </tr>
+          <tr>
+            <td><strong>Express Bogotá</strong></td>
+            <td>Bogotá D.C.</td>
+            <td>🇨🇴 Colombia</td>
+            <td><span class="badge badge-purple">Express</span></td>
+            <td>1 rango</td>
+            <td><span style="color:var(--text-3); font-size:12px">Sin restricciones</span></td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+
+  <!-- ══════════════════════════════════════════
+       TAB 3: CARGA MASIVA
+  ══════════════════════════════════════════ -->
+  <div class="panel" id="panel-3">
+    <div class="page-header">
+      <div>
+        <div class="page-title">Carga masiva (CSV)</div>
+        <div class="page-desc">Importa o exporta zonas y tarifas en lote.</div>
+      </div>
+      <div style="display:flex; gap:8px;">
+        <button class="btn btn-sm"><i class="ti ti-download"></i>Exportar CSV</button>
+        <button class="btn btn-sm btn-primary"><i class="ti ti-upload"></i>Importar CSV</button>
+      </div>
+    </div>
+    <div style="background:var(--surface-2); border:1px solid var(--border); border-radius:var(--radius-lg); padding:18px; margin-bottom:18px;">
+      <div style="font-size:14px; font-weight:600; margin-bottom:6px;">¿Cómo importar?</div>
+      <div class="step-list" style="margin-bottom:16px;">
+        <div class="step-item"><span class="step-num">1</span>Descarga la plantilla de ejemplo</div>
+        <div class="step-item"><span class="step-num">2</span>Completa las filas en Excel o Google Sheets</div>
+        <div class="step-item"><span class="step-num">3</span>Guarda como CSV UTF-8</div>
+        <div class="step-item"><span class="step-num">4</span>Usa el botón "Importar CSV" de arriba</div>
+      </div>
+      <button class="btn btn-sm"><i class="ti ti-download"></i>Descargar plantilla de ejemplo</button>
+    </div>
+
+    <div class="section-label">Columnas del CSV</div>
+    <div class="table-wrap">
+      <table class="col-table">
+        <thead>
+          <tr>
+            <th style="width:160px">Columna</th>
+            <th style="width:70px">¿Requerida?</th>
+            <th>Descripción</th>
+            <th>Ejemplo</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><code>departamento</code></td>
+            <td><span class="req">Sí</span></td>
+            <td class="col-desc">Nombre del departamento o estado</td>
+            <td><code>Antioquia</code></td>
+          </tr>
+          <tr>
+            <td><code>nombre_tarifa</code></td>
+            <td><span class="req">Sí</span></td>
+            <td class="col-desc">Nombre único de la tarifa</td>
+            <td><code>Envío Estándar</code></td>
+          </tr>
+          <tr>
+            <td><code>tipo_servicio</code></td>
+            <td><span class="req">Sí</span></td>
+            <td class="col-desc">Tipo de envío: <code>standard</code>, <code>express</code> o <code>pickup</code></td>
+            <td><code>standard</code></td>
+          </tr>
+          <tr>
+            <td><code>precio</code></td>
+            <td><span class="req">Sí</span></td>
+            <td class="col-desc">Precio en la moneda de la tienda</td>
+            <td><code>15000</code></td>
+          </tr>
+          <tr>
+            <td><code>condicion_ciudad</code></td>
+            <td><span class="opt">No</span></td>
+            <td class="col-desc">Aplica solo a esta ciudad</td>
+            <td><code>Medellín</code></td>
+          </tr>
+          <tr>
+            <td><code>ciudades</code></td>
+            <td><span class="opt">No</span></td>
+            <td class="col-desc">Ciudades de la zona, separadas por <code>|</code></td>
+            <td><code>Bello|Itagüí</code></td>
+          </tr>
+          <tr>
+            <td><code>descripcion</code></td>
+            <td><span class="opt">No</span></td>
+            <td class="col-desc">Texto visible al cliente en checkout</td>
+            <td><code>Llega en 3-5 días</code></td>
+          </tr>
+          <tr>
+            <td><code>hora_desde</code> / <code>hora_hasta</code></td>
+            <td><span class="opt">No</span></td>
+            <td class="col-desc">Ventana horaria del servicio</td>
+            <td><code>08:00</code> / <code>18:00</code></td>
+          </tr>
+          <tr>
+            <td><code>dias</code></td>
+            <td><span class="opt">No</span></td>
+            <td class="col-desc">Días hábiles de entrega</td>
+            <td><code>3-7</code></td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+
+<!-- ══════════════════════════════════════════
+     MODAL: NUEVA TARIFA
+══════════════════════════════════════════ -->
+<div class="modal-overlay" id="modal-nueva-tarifa">
+  <div class="modal">
+
+    <div class="modal-header">
+      <span class="modal-title" id="modal-title">Nueva tarifa</span>
+      <button class="btn btn-sm btn-ghost" onclick="closeModal()"><i class="ti ti-x"></i></button>
+    </div>
+
+    <!-- PASO 1: Seleccionar departamento -->
+    <div id="modal-step-1">
+      <div class="modal-body">
+        <div class="step-indicator">
+          <div class="step-dot active">1</div>
+          <div class="step-line"></div>
+          <div class="step-dot pending">2</div>
+        </div>
+        <div class="form-field">
+          <label class="form-label">¿A qué departamentos aplica esta tarifa?</label>
+          <div style="border:1px solid var(--border-strong); border-radius:var(--radius-md); overflow:hidden; margin-top:4px;">
+            <div style="max-height:220px; overflow-y:auto;">
+              <label class="dept-check-row"><input type="checkbox" class="dept-check" value="Antioquia" onchange="onDeptCheck()"> Antioquia</label>
+              <label class="dept-check-row"><input type="checkbox" class="dept-check" value="Atlántico" onchange="onDeptCheck()"> Atlántico</label>
+              <label class="dept-check-row"><input type="checkbox" class="dept-check" value="Bolívar" onchange="onDeptCheck()"> Bolívar</label>
+              <label class="dept-check-row"><input type="checkbox" class="dept-check" value="Boyacá" onchange="onDeptCheck()"> Boyacá</label>
+              <label class="dept-check-row"><input type="checkbox" class="dept-check" value="Caldas" onchange="onDeptCheck()"> Caldas</label>
+              <label class="dept-check-row"><input type="checkbox" class="dept-check" value="Caquetá" onchange="onDeptCheck()"> Caquetá</label>
+              <label class="dept-check-row"><input type="checkbox" class="dept-check" value="Cauca" onchange="onDeptCheck()"> Cauca</label>
+              <label class="dept-check-row"><input type="checkbox" class="dept-check" value="Cesar" onchange="onDeptCheck()"> Cesar</label>
+              <label class="dept-check-row"><input type="checkbox" class="dept-check" value="Córdoba" onchange="onDeptCheck()"> Córdoba</label>
+              <label class="dept-check-row"><input type="checkbox" class="dept-check" value="Cundinamarca" onchange="onDeptCheck()"> Cundinamarca</label>
+              <label class="dept-check-row"><input type="checkbox" class="dept-check" value="Huila" onchange="onDeptCheck()"> Huila</label>
+              <label class="dept-check-row"><input type="checkbox" class="dept-check" value="La Guajira" onchange="onDeptCheck()"> La Guajira</label>
+              <label class="dept-check-row"><input type="checkbox" class="dept-check" value="Magdalena" onchange="onDeptCheck()"> Magdalena</label>
+              <label class="dept-check-row"><input type="checkbox" class="dept-check" value="Meta" onchange="onDeptCheck()"> Meta</label>
+              <label class="dept-check-row"><input type="checkbox" class="dept-check" value="Nariño" onchange="onDeptCheck()"> Nariño</label>
+              <label class="dept-check-row"><input type="checkbox" class="dept-check" value="Norte de Santander" onchange="onDeptCheck()"> Norte de Santander</label>
+              <label class="dept-check-row"><input type="checkbox" class="dept-check" value="Quindío" onchange="onDeptCheck()"> Quindío</label>
+              <label class="dept-check-row"><input type="checkbox" class="dept-check" value="Risaralda" onchange="onDeptCheck()"> Risaralda</label>
+              <label class="dept-check-row"><input type="checkbox" class="dept-check" value="Santander" onchange="onDeptCheck()"> Santander</label>
+              <label class="dept-check-row"><input type="checkbox" class="dept-check" value="Sucre" onchange="onDeptCheck()"> Sucre</label>
+              <label class="dept-check-row"><input type="checkbox" class="dept-check" value="Tolima" onchange="onDeptCheck()"> Tolima</label>
+              <label class="dept-check-row"><input type="checkbox" class="dept-check" value="Valle del Cauca" onchange="onDeptCheck()"> Valle del Cauca</label>
+              <label class="dept-check-row"><input type="checkbox" class="dept-check" value="Resto del país" onchange="onDeptCheck()"> Resto del país</label>
+            </div>
+          </div>
+          <div id="dept-selected-count" style="font-size:12px; color:var(--text-3); margin-top:6px;">Ningún departamento seleccionado.</div>
+        </div>
+      </div>
+      <div class="modal-footer">
+        <button class="btn btn-sm" onclick="closeModal()">Cancelar</button>
+        <button class="btn btn-sm btn-primary" id="btn-siguiente" disabled onclick="goToStep2()">Siguiente <i class="ti ti-arrow-right"></i></button>
+      </div>
+    </div>
+
+    <!-- PASO 2: Formulario completo -->
+    <div id="modal-step-2" style="display:none;">
+      <div class="modal-body" style="max-height: 70vh; overflow-y: auto;">
+
+        <div class="step-indicator">
+          <div class="step-dot done"><i class="ti ti-check" style="font-size:10px"></i></div>
+          <div class="step-line" style="background:var(--purple)"></div>
+          <div class="step-dot active">2</div>
+        </div>
+
+        <div style="background:var(--purple-light); border-radius:var(--radius-md); padding:8px 12px; font-size:12px; color:var(--purple-text); margin-bottom:18px; display:flex; align-items:center; gap:8px;">
+          <i class="ti ti-map-pin" style="font-size:14px"></i>
+          Zona: <strong id="dept-label-display">—</strong>
+          <button onclick="backToStep1()" style="margin-left:auto; font-size:11px; background:none; border:none; color:var(--purple); cursor:pointer; font-weight:500;">Cambiar</button>
+        </div>
+
+        <!-- Nombre -->
+        <div class="form-field">
+          <label class="form-label">Nombre<span class="req">*</span></label>
+          <input type="text" placeholder='Ej. "Envío Express"' style="width:100%">
+          <div class="form-hint">Lo que el cliente ve en el checkout.</div>
+        </div>
+
+        <!-- Tipo de servicio -->
+        <div class="form-field">
+          <label class="form-label">Tipo de servicio</label>
+          <select style="width:100%">
+            <option>Envío estándar</option>
+            <option>Envío express</option>
+            <option>Recogida en tienda</option>
+          </select>
+        </div>
+
+        <!-- Precio -->
+        <div class="form-field">
+          <label class="form-label">Precio (USD)<span class="req">*</span></label>
+          <input type="text" placeholder="0.00" style="width:100%">
+        </div>
+
+        <!-- Modo de precio -->
+        <div class="form-field">
+          <label class="form-label">Modo de precio</label>
+          <div class="radio-group">
+            <label><input type="radio" name="modo-precio" value="fijo" checked> Precio fijo</label>
+            <label><input type="radio" name="modo-precio" value="peso"> Por peso</label>
+            <label><input type="radio" name="modo-precio" value="monto"> Por monto del carrito</label>
+          </div>
+        </div>
+
+        <!-- Descripción -->
+        <div class="form-field">
+          <label class="form-label">Descripción <span style="font-weight:400; color:var(--text-3)">(opcional)</span></label>
+          <input type="text" placeholder="Descripción visible al cliente" style="width:100%">
+        </div>
+
+        <!-- Estimado de entrega -->
+        <div class="section-divider">Estimado de entrega <span style="font-weight:400; text-transform:none; letter-spacing:0">(opcional)</span></div>
+        <div class="form-field">
+          <div class="two-inputs">
+            <div>
+              <label class="form-label">Mín (días)</label>
+              <input type="number" placeholder="—" min="0" style="width:100%">
+            </div>
+            <div>
+              <label class="form-label">Máx (días)</label>
+              <input type="number" placeholder="—" min="0" style="width:100%">
+            </div>
+          </div>
+          <div class="form-hint">Días calendario desde la compra. Shopify muestra el rango de fechas bajo la tarifa en el checkout.</div>
+        </div>
+
+        <!-- Condición de ciudad -->
+        <div class="section-divider">Condición de ciudad</div>
+        <div class="form-field">
+          <div class="radio-group">
+            <label><input type="radio" name="cond-ciudad" value="todas" checked> Todas las ciudades</label>
+            <label><input type="radio" name="cond-ciudad" value="solo"> Solo estas ciudades</label>
+            <label><input type="radio" name="cond-ciudad" value="excepto"> Todas excepto estas</label>
+          </div>
+        </div>
+
+        <!-- Condición de producto -->
+        <div class="section-divider">Condición de producto</div>
+        <div class="form-field">
+          <div class="radio-group">
+            <label><input type="radio" name="cond-producto" value="todos" checked onchange="toggleProductMatch(false)"> Todos los productos</label>
+            <label><input type="radio" name="cond-producto" value="contiene" onchange="toggleProductMatch(true)"> Si el carrito contiene</label>
+            <label><input type="radio" name="cond-producto" value="no-contiene" onchange="toggleProductMatch(true)"> Si el carrito no contiene</label>
+          </div>
+        </div>
+
+        <div id="product-match-fields" style="display:none;">
+          <div class="form-field">
+            <div class="two-inputs">
+              <div>
+                <label class="form-label">Comparar por</label>
+                <select style="width:100%">
+                  <option>Tags</option>
+                  <option>Tipo de producto</option>
+                  <option>Proveedor</option>
+                  <option>Colección</option>
+                </select>
+              </div>
+              <div>
+                <label class="form-label">Cómo aplicar</label>
+                <select style="width:100%">
+                  <option>Algún ítem del carrito</option>
+                  <option>Todos los ítems del carrito</option>
+                </select>
+              </div>
+            </div>
+          </div>
+          <div class="form-field">
+            <label class="form-label">Valores <span style="font-weight:400; color:var(--text-3)">(separados por coma)</span></label>
+            <input type="text" placeholder="fragil, pesado" style="width:100%">
+          </div>
+        </div>
+
+        <!-- Horario -->
+        <div class="section-divider">Horario disponible <span style="font-weight:400; text-transform:none; letter-spacing:0">(opcional, hora Colombia)</span></div>
+        <div class="form-field">
+          <div class="time-row">
+            <input type="time" style="flex:1">
+            <span>a</span>
+            <input type="time" style="flex:1">
+          </div>
+          <div class="form-hint">Dejar vacío para disponible todo el día.</div>
+        </div>
+
+        <!-- Días de la semana -->
+        <div class="section-divider">Días de la semana <span style="font-weight:400; text-transform:none; letter-spacing:0">(opcional)</span></div>
+        <div class="form-field">
+          <div class="check-group">
+            <label><input type="checkbox"> Lun</label>
+            <label><input type="checkbox"> Mar</label>
+            <label><input type="checkbox"> Mié</label>
+            <label><input type="checkbox"> Jue</label>
+            <label><input type="checkbox"> Vie</label>
+            <label><input type="checkbox"> Sáb</label>
+            <label><input type="checkbox"> Dom</label>
+          </div>
+          <div class="form-hint">Si no seleccionas ninguno, aplica todos los días.</div>
+        </div>
+
+        <!-- Info box -->
+        <div class="info-box">
+          <strong>Campos obligatorios:</strong>
+          <ul style="margin: 6px 0 8px 16px; line-height:1.7">
+            <li>Nombre — lo que el cliente ve en el checkout (ej. "Envío Express").</li>
+            <li>Tipo de servicio — elige entre estándar, express o recogida en tienda.</li>
+            <li>Precio (USD) — precio fijo, o configura rangos por peso o total del carrito.</li>
+          </ul>
+          Los demás campos (ciudad, horario, días, tags de producto) son opcionales y sirven para afinar cuándo aplica esta tarifa.
+        </div>
+
+      </div>
+      <div class="modal-footer">
+        <button class="btn btn-sm" onclick="closeModal()">Cerrar sin guardar</button>
+        <button class="btn btn-sm btn-primary"><i class="ti ti-check"></i>Guardar</button>
+      </div>
+    </div>
+
+  </div>
+</div>
+
+</div><!-- /shell -->
+
+<script>
+  function onWarehouseChange(sel) {
+    const name = sel.options[sel.selectedIndex].text.replace('📦 ', '');
+    ['zonas','tarifas'].forEach(id => {
+      const el = document.getElementById(id + '-warehouse-label');
+      if (el) el.textContent = name;
+    });
+  }
+
+  function switchTab(idx) {
+    // Solo las 2 tabs (Zonas/Tarifas) tienen tab-btn
+    document.querySelectorAll('.tab-btn').forEach((btn, i) => {
+      btn.classList.toggle('active', i === idx);
+    });
+    document.querySelectorAll('.panel').forEach((panel, i) => {
+      panel.classList.toggle('active', i === idx);
+    });
+    const labels = ['Zonas', 'Tarifas', 'Consultar', 'Carga masiva'];
+    document.getElementById('breadcrumb-label').textContent = labels[idx];
+  }
+
+  function showAddZone() {
+    const form = document.getElementById('add-zone-form');
+    form.style.display = 'block';
+    form.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+  }
+  function hideAddZone() {
+    document.getElementById('add-zone-form').style.display = 'none';
+  }
+
+  // ── MODAL NUEVA TARIFA ──
+  let selectedDept = null;
+
+  function openModal() {
+    document.querySelectorAll('.dept-check').forEach(c => c.checked = false);
+    document.getElementById('dept-selected-count').textContent = 'Ningún departamento seleccionado.';
+    document.getElementById('btn-siguiente').disabled = true;
+    document.getElementById('modal-step-1').style.display = 'block';
+    document.getElementById('modal-step-2').style.display = 'none';
+    document.getElementById('modal-title').textContent = 'Nueva tarifa — Paso 1 de 2';
+    document.getElementById('modal-nueva-tarifa').classList.add('open');
+  }
+
+  function closeModal() {
+    document.getElementById('modal-nueva-tarifa').classList.remove('open');
+  }
+
+  function onDeptCheck() {
+    const checked = Array.from(document.querySelectorAll('.dept-check:checked')).map(c => c.value);
+    const count = checked.length;
+    const label = document.getElementById('dept-selected-count');
+    if (count === 0) {
+      label.textContent = 'Ningún departamento seleccionado.';
+    } else {
+      label.textContent = count === 1 ? `1 departamento seleccionado: ${checked[0]}` : `${count} departamentos seleccionados: ${checked.join(', ')}`;
+    }
+    document.getElementById('btn-siguiente').disabled = count === 0;
+  }
+
+  function onDeptChange(el) {
+    selectedDept = el.value || null;
+    document.getElementById('btn-siguiente').disabled = !selectedDept;
+  }
+
+  function selectDept(el, name) {
+    selectedDept = name;
+    document.getElementById('btn-siguiente').disabled = false;
+  }
+
+  function goToStep2() {
+    const checked = Array.from(document.querySelectorAll('.dept-check:checked')).map(c => c.value);
+    if (checked.length === 0) return;
+    selectedDept = checked.join(', ');
+    document.getElementById('dept-label-display').textContent = selectedDept;
+    document.getElementById('modal-step-1').style.display = 'none';
+    document.getElementById('modal-step-2').style.display = 'block';
+    document.getElementById('modal-title').textContent = 'Nueva tarifa — Paso 2 de 2';
+  }
+
+  function backToStep1() {
+    document.getElementById('modal-step-1').style.display = 'block';
+    document.getElementById('modal-step-2').style.display = 'none';
+    document.getElementById('modal-title').textContent = 'Nueva tarifa — Paso 1 de 2';
+  }
+
+  function toggleProductMatch(show) {
+    document.getElementById('product-match-fields').style.display = show ? 'block' : 'none';
+  }
+
+  document.getElementById('modal-nueva-tarifa').addEventListener('click', function(e) {
+    if (e.target === this) closeModal();
+  });
+
+  function switchMarket(val) {
+    document.getElementById('rates-co').style.display = val === 'co' ? 'block' : 'none';
+    document.getElementById('rates-mx').style.display = val === 'mx' ? 'block' : 'none';
+    document.getElementById('rate-search').value = '';
+    filterRates();
+  }
+
+  function filterRates() {
+    const q = document.getElementById('rate-search').value.toLowerCase().trim();
+    const groups = document.querySelectorAll('#rates-co-list .dept-group');
+    let anyVisible = false;
+
+    groups.forEach(group => {
+      const deptName = group.dataset.dept || '';
+      const cards = group.querySelectorAll('.rate-card');
+      let groupHasMatch = false;
+
+      cards.forEach(card => {
+        const name = card.dataset.name || '';
+        const match = !q || name.includes(q) || deptName.includes(q);
+        card.style.display = match ? '' : 'none';
+        if (match) groupHasMatch = true;
+      });
+
+      group.style.display = groupHasMatch ? '' : 'none';
+      if (groupHasMatch) anyVisible = true;
+    });
+
+    // fallback visibility
+    const fallbackCard = document.querySelector('.rate-card[data-fallback="true"]');
+    if (fallbackCard) {
+      const fallbackMatch = !q || 'fallback rate'.includes(q);
+      fallbackCard.style.display = fallbackMatch ? '' : 'none';
+      const notice = document.querySelector('.notice-purple');
+      if (notice) notice.style.display = fallbackMatch ? '' : 'none';
+      const fallbackLabel = document.querySelector('#rates-co .section-label:first-of-type');
+      if (fallbackLabel) fallbackLabel.style.display = fallbackMatch ? '' : 'none';
+      if (fallbackMatch) anyVisible = true;
+    }
+
+    const ratesLabel = document.getElementById('rates-co-label');
+    if (ratesLabel) ratesLabel.style.display = anyVisible ? '' : 'none';
+
+    document.getElementById('no-results').style.display = anyVisible ? 'none' : '';
+  }
+</script>
+
+</body>
+</html>

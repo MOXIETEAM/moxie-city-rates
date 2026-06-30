@@ -12,13 +12,15 @@ import { isDeliveryRules } from "../utils/variant";
  * - Sin zona configurada → aplica tarifa por defecto (_default)
  *
  * Cada request se persiste al quote log (fire-and-forget, nunca bloquea ni
- * demora la respuesta a Shopify) para diagnóstico del merchant en /app/quotes.
+ * demora la respuesta a Shopify) para diagnóstico del merchant en la pestaña
+ * Consultar de /app/shipping-rules.
  *
  * Este endpoint es público (no usa authenticate.admin).
  * El shop se identifica via query param ?shop= incluido al registrar el carrier service.
  */
 
 import { quoteShipping } from "../rate-engine.server";
+import { resolveOriginWarehouseId } from "../utils/warehouse-cache.server";
 import { debug, info, error as logError } from "../utils/logger.server";
 import { verifyCarrierServiceCallbackHmac } from "../utils/shopify-hmac.server";
 import { consume, getClientIp } from "../utils/rate-limit.server";
@@ -147,6 +149,15 @@ export const action = async ({ request }) => {
 
     const cartProducts = await resolveCartProducts(shop, items);
 
+    // Origen de despacho: Shopify parte el checkout por Location y manda el
+    // `origin` (dirección, sin id). Lo resolvemos a la bodega para que solo
+    // apliquen las tarifas de ESA bodega (las sin bodega aplican a todas).
+    // Best-effort: si no resuelve, originWarehouseId = null → no filtra.
+    const originWarehouseId = await resolveOriginWarehouseId(shop, body?.rate?.origin);
+    if (originWarehouseId) {
+      debug(`[carrier-service] origin → warehouse ${originWarehouseId}`);
+    }
+
     const trace = createQuoteTrace();
     const result = await quoteShipping({
       shop,
@@ -157,6 +168,7 @@ export const action = async ({ request }) => {
       shopMeta,
       cartProducts,
       trace,
+      originWarehouseId,
     });
 
     const {

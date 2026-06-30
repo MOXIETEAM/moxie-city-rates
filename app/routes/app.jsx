@@ -23,7 +23,6 @@ export default function App() {
       <s-app-nav>
         <s-link href="/app">{t("nav.home")}</s-link>
         <s-link href="/app/shipping-rules">{t("nav.shipping_rules")}</s-link>
-        <s-link href="/app/quotes">{t("nav.quotes")}</s-link>
         <s-link href="/app/billing">{t("nav.billing")}</s-link>
       </s-app-nav>
       <Outlet context={{ locale }} />

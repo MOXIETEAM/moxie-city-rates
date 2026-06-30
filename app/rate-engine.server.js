@@ -308,7 +308,7 @@ function annotateSelection(trace, matchingRates, finalCodes, cartWeightKg, cartT
  *   pickupMismatchDept: string|null,
  * }>}
  */
-export async function quoteShipping({ shop, destCountry, province, city, items, shopMeta, itemTags = null, cartProducts = null, trace = null }) {
+export async function quoteShipping({ shop, destCountry, province, city, items, shopMeta, itemTags = null, cartProducts = null, trace = null, originWarehouseId = null }) {
   // Zonas no-CO usan slug prefijado ("mx_jalisco"); el candidato legacy sin
   // prefijo cubre zonas creadas antes del esquema multi-país.
   const slugCandidates = provinceToZoneSlugCandidates(destCountry, province);
@@ -346,7 +346,7 @@ export async function quoteShipping({ shop, destCountry, province, city, items, 
   //   - Si la zona NO define un serviceCode → _default lo cubre (fill-in por código).
   //   - Si no hay zona para el depto → todo viene de _default.
   const zoneDefinedCodes = await getZoneDefinedServiceCodes(shop, departmentSlug);
-  const rateOpts = { country: destCountry, timezone: shopMeta.ianaTimezone, threshold: shopMeta.cityMatchThreshold, cartProducts, trace };
+  const rateOpts = { country: destCountry, timezone: shopMeta.ianaTimezone, threshold: shopMeta.cityMatchThreshold, cartProducts, trace, originWarehouseId };
   const zoneRates = zoneDefinedCodes.size
     ? await getRatesForDestination(shop, departmentSlug, resolvedCity, departmentName, itemTags, rateOpts)
     : [];
