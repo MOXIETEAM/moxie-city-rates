@@ -2461,7 +2461,7 @@ export default function ShippingRules() {
   // la gestión de tarifas de la de zonas en lugar de una página vertical larga.
   // Pestaña inicial desde la URL (?tab) para que el filtro/paginación del log
   // de Consultar conserven la pestaña al recargar; luego es estado de cliente.
-  const [activeTab, setActiveTab] = useState(searchParams.get("tab") || "tarifas");
+  const [activeTab, setActiveTab] = useState(searchParams.get("tab") || "zonas");
   // Búsqueda de tarifas por nombre (filtra las cards de la pestaña Tarifas).
   const [rateSearch, setRateSearch] = useState("");
   const rateQuery = rateSearch.trim().toLowerCase();
@@ -2554,16 +2554,16 @@ export default function ShippingRules() {
       <s-section>
         <s-stack direction="inline" gap="small-200">
           <s-button
-            variant={activeTab === "tarifas" ? "primary" : "tertiary"}
-            onClick={() => setActiveTab("tarifas")}
-          >
-            {t("shipping.tab_rates")}
-          </s-button>
-          <s-button
             variant={activeTab === "zonas" ? "primary" : "tertiary"}
             onClick={() => setActiveTab("zonas")}
           >
             {t("shipping.tab_zones")}
+          </s-button>
+          <s-button
+            variant={activeTab === "tarifas" ? "primary" : "tertiary"}
+            onClick={() => setActiveTab("tarifas")}
+          >
+            {t("shipping.tab_rates")}
           </s-button>
           <s-button
             variant={activeTab === "consultar" ? "primary" : "tertiary"}
