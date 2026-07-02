@@ -596,6 +596,14 @@ export const action = async ({ request }) => {
       if (rateId) {
         // Edición: una sola tarifa (zoneId no cambia en saveRate al editar).
         await saveRate({ id: rateId, zoneId, ...rateData });
+      } else if (createDepartments.length === 0 && zoneId) {
+        // Alta en una zona conocida (ej. tarifa por defecto / zona _default):
+        // no hay departamento del catálogo, se crea directo en ese zoneId.
+        const rateCount = await prisma.shippingRate.count({ where: { zoneId } });
+        if (!checkLimit(planInfo, "ratesPerZone", rateCount)) {
+          return { error: t("billing.limit_rates", { max: planInfo.limits.maxRatesPerZone }) };
+        }
+        await saveRate({ zoneId, ...rateData });
       } else {
         // Alta: una tarifa por departamento elegido. Crea la zona si no existe
         // (get-or-create por slug), respetando los límites del plan.
@@ -1258,7 +1266,12 @@ function RateForm({ rate, zoneId, zoneSlug, createCountry, createDepartments, de
   return (
     <fetcher.Form method="post">
       <input type="hidden" name="_intent" value="save_rate" />
-      {isCreate ? (
+      {rate?.id ? (
+        <>
+          <input type="hidden" name="zoneId" value={zoneId} />
+          <input type="hidden" name="rateId" value={rate.id} />
+        </>
+      ) : createNames.length ? (
         <>
           <input type="hidden" name="country" value={createCountry || "CO"} />
           {createNames.map((name) => (
@@ -1266,10 +1279,8 @@ function RateForm({ rate, zoneId, zoneSlug, createCountry, createDepartments, de
           ))}
         </>
       ) : (
-        <>
-          <input type="hidden" name="zoneId" value={zoneId} />
-          <input type="hidden" name="rateId" value={rate.id} />
-        </>
+        // Alta en zona conocida (tarifa por defecto): se manda el zoneId.
+        <input type="hidden" name="zoneId" value={zoneId} />
       )}
       <input type="hidden" name="pricingMode" value={pricingMode} />
       <input type="hidden" name="weightTiers" value={JSON.stringify(weightTiers)} />
