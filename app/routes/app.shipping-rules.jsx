@@ -2734,6 +2734,12 @@ export default function ShippingRules() {
           >
             {t("shipping.tab_csv")}
           </s-button>
+          <s-button
+            variant={activeTab === "avanzado" ? "primary" : "tertiary"}
+            onClick={() => setActiveTab("avanzado")}
+          >
+            {t("shipping.tab_advanced")}
+          </s-button>
         </s-stack>
       </s-section>
 
@@ -3053,44 +3059,43 @@ export default function ShippingRules() {
       </s-section>
       )}
 
-      <s-section slot="aside" heading={t("shipping.aside_title")}>
-        <details style={{ marginTop: 8 }}>
-          <summary style={{ cursor: "pointer", padding: "8px 0" }}>
-            <s-text variant="headingSm">{t("shipping.advanced_title")}</s-text>
-          </summary>
-          <s-stack direction="block" gap="base" paddingBlockStart="base">
+      {/* ── TAB: Avanzado (antes en el aside — ahora pestaña propia para que
+          el contenido principal ocupe el 100% del ancho) ── */}
+      {activeTab === "avanzado" && (
+      <s-section heading={t("shipping.advanced_title")}>
+        <s-stack direction="block" gap="large">
+          <s-text variant="bodySm" tone="subdued">
+            {t("shipping.advanced_desc")}
+          </s-text>
+
+          <s-stack direction="block" gap="base">
+            <s-text variant="headingSm">{t("shipping.sync_title")}</s-text>
             <s-text variant="bodySm" tone="subdued">
-              {t("shipping.advanced_desc")}
+              {t("shipping.sync_desc")}
             </s-text>
-
-            <s-stack direction="block" gap="base">
-              <s-text variant="headingSm">{t("shipping.sync_title")}</s-text>
-              <s-text variant="bodySm" tone="subdued">
-                {t("shipping.sync_desc")}
-              </s-text>
-              <syncFetcher.Form method="post">
-                <input type="hidden" name="_intent" value="sync_metafield" />
-                <s-button type="submit" variant="secondary" loading={isSyncing}>
-                  {isSyncing ? t("shipping.sync_loading") : t("shipping.sync_button")}
-                </s-button>
-              </syncFetcher.Form>
-            </s-stack>
-
-            <s-stack direction="block" gap="base">
-              <s-text variant="headingSm">{t("shipping.carrier_title")}</s-text>
-              <s-text variant="bodySm" tone="subdued">
-                {t("shipping.carrier_desc")}
-              </s-text>
-              <carrierFetcher.Form method="post">
-                <input type="hidden" name="_intent" value="register_carrier" />
-                <s-button type="submit" variant="secondary" loading={isRegistering}>
-                  {isRegistering ? t("shipping.carrier_loading") : t("shipping.carrier_button")}
-                </s-button>
-              </carrierFetcher.Form>
-            </s-stack>
+            <syncFetcher.Form method="post">
+              <input type="hidden" name="_intent" value="sync_metafield" />
+              <s-button type="submit" variant="secondary" loading={isSyncing}>
+                {isSyncing ? t("shipping.sync_loading") : t("shipping.sync_button")}
+              </s-button>
+            </syncFetcher.Form>
           </s-stack>
-        </details>
+
+          <s-stack direction="block" gap="base">
+            <s-text variant="headingSm">{t("shipping.carrier_title")}</s-text>
+            <s-text variant="bodySm" tone="subdued">
+              {t("shipping.carrier_desc")}
+            </s-text>
+            <carrierFetcher.Form method="post">
+              <input type="hidden" name="_intent" value="register_carrier" />
+              <s-button type="submit" variant="secondary" loading={isRegistering}>
+                {isRegistering ? t("shipping.carrier_loading") : t("shipping.carrier_button")}
+              </s-button>
+            </carrierFetcher.Form>
+          </s-stack>
+        </s-stack>
       </s-section>
+      )}
     </s-page>
     </ShopMetaContext.Provider>
   );

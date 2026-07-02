@@ -122,7 +122,7 @@
     "all_cities_label": "All cities",
     "only_label": "Only: {{cities}}",
     "except_label": "All except: {{cities}}",
-    "aside_title": "Actions",
+    "tab_advanced": "Advanced",
     "shopify_config": "Shopify Configuration",
     "zone_names_title": "Important: shipping zone names",
     "zone_names_desc": "In Shopify Admin → Shipping and delivery → Shipping profile, the name of each zone determines what shipping type it generates:",

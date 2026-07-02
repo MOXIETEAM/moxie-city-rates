@@ -122,7 +122,7 @@
     "all_cities_label": "Todas las ciudades",
     "only_label": "Solo: {{cities}}",
     "except_label": "Todas excepto: {{cities}}",
-    "aside_title": "Acciones",
+    "tab_advanced": "Avanzado",
     "shopify_config": "Configuración en Shopify",
     "zone_names_title": "Importante: nombres de zonas de envío",
     "zone_names_desc": "En Shopify Admin → Envíos y entregas → Perfil de envío, el nombre de cada zona determina qué tipo de envío genera:",
