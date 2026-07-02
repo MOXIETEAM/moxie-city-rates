@@ -43,15 +43,6 @@ function useWarehouses() {
   return useContext(ShopMetaContext).warehouses || [];
 }
 
-const DEPARTMENTS = [
-  "Amazonas", "Antioquia", "Arauca", "Atlántico", "Bogotá D.C.", "Bolívar",
-  "Boyacá", "Caldas", "Caquetá", "Casanare", "Cauca", "Cesar", "Chocó",
-  "Córdoba", "Cundinamarca", "Guainía", "Guaviare", "Huila", "La Guajira",
-  "Magdalena", "Meta", "Nariño", "Norte de Santander", "Putumayo", "Quindío",
-  "Risaralda", "San Andrés", "Santander", "Sucre", "Tolima", "Valle del Cauca",
-  "Vaupés", "Vichada",
-];
-
 function getServiceCodes(t) {
   return [
     { value: "mox_envio", label: t("shipping.service_standard") },
@@ -426,8 +417,12 @@ export const action = async ({ request }) => {
       const items = [{ name: t("quotes.sim_item_name"), quantity: 1, grams: Math.round(weightKg * 1000), price: Math.round(cartTotal * 100), properties: {} }];
       const cartProducts = [{ sku, vendor, productType, tags: itemTags, collections }];
 
+      // Origen simulado (opcional): ejercita el scope por bodega igual que un
+      // checkout real despachando desde esa Location. Vacío = sin filtro.
+      const originWarehouseId = formData.get("origin_warehouse") || null;
+
       const trace = createQuoteTrace();
-      const result = await quoteShipping({ shop: session.shop, destCountry, province, city, items, shopMeta, cartProducts, trace });
+      const result = await quoteShipping({ shop: session.shop, destCountry, province, city, items, shopMeta, cartProducts, trace, originWarehouseId });
       const rates = result.finalRates.map((entry) => ({
         name: entry.rate ? entry.rate.name : entry.name,
         serviceCode: entry.rate ? entry.rate.serviceCode : entry.serviceCode,
@@ -1392,7 +1387,8 @@ function RateForm({ rate, zoneId, zoneSlug, createCountry, createDepartments, de
           )}
         </s-stack>
 
-        {warehouses.length > 0 && (
+        {/* Con 1 sola bodega el scope por origen es un no-op → no mostrar. */}
+        {warehouses.length > 1 && (
           <div>
             <label style={{ display: "block", fontSize: "13px", fontWeight: 600, marginBottom: "4px" }}>
               {t("shipping.origin_warehouse")}
@@ -1929,7 +1925,7 @@ function RateCard({ rate, zoneId, zoneSlug, department, t, planInfo, enabledServ
             })}
           </div>
         )}
-        {warehouses.length > 0 && (
+        {(warehouses.length > 1 || assignedWarehouse || assignedMissing) && (
           <div style={{ display: "flex", alignItems: "center", gap: "4px", fontSize: "12px" }}>
             <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" width="14" height="14" fill="currentColor" aria-hidden="true" style={{ color: assignedMissing ? "#b45309" : "#6b6b68" }}>
               <path d="M10 2 2 6v12h5v-5h6v5h5V6l-8-4Z"/>

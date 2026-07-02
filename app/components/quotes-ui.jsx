@@ -143,6 +143,22 @@ function Simulator({ t, countries, subdivisionsByCountry, shopCountry, shopCurre
               </select>
             </div>
             <s-text-field label={t("quotes.sim_city")} name="city" placeholder={t("quotes.sim_city_placeholder")} style={{ minWidth: 160 }} />
+            {warehouses.length > 1 && (
+              <div>
+                <label style={{ display: "block", fontSize: 13, fontWeight: 600, marginBottom: 4 }}>
+                  {t("quotes.sim_origin")}
+                </label>
+                <select
+                  name="origin_warehouse"
+                  style={{ padding: "8px 12px", borderRadius: 8, border: "1px solid #ccc", minWidth: 180 }}
+                >
+                  <option value="">{t("quotes.sim_origin_auto")}</option>
+                  {warehouses.map((w) => (
+                    <option key={w.id} value={w.id}>{w.name}</option>
+                  ))}
+                </select>
+              </div>
+            )}
             <s-text-field label={t("quotes.sim_weight")} name="weight_kg" type="number" step="any" value="1" style={{ maxWidth: 110 }} />
             <s-text-field label={t("quotes.sim_cart_total", { currency: shopCurrency })} name="cart_total" type="number" step="any" value="0" style={{ maxWidth: 140 }} />
             <s-text-field label={t("quotes.sim_tags")} name="tags" placeholder="fragil, pesado" style={{ minWidth: 160 }} />

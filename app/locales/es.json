@@ -2,8 +2,7 @@
   "nav": {
     "home": "Inicio",
     "shipping_rules": "Reglas de envío",
-    "billing": "Planes",
-    "quotes": "Cotizaciones"
+    "billing": "Planes"
   },
   "home": {
     "title": "Delivery Rules",
@@ -343,6 +342,8 @@
     "sim_country": "País",
     "sim_province": "Departamento / Estado",
     "sim_city": "Ciudad",
+    "sim_origin": "Simular despacho desde",
+    "sim_origin_auto": "Automático (sin filtro)",
     "sim_city_placeholder": "ej. Medellín",
     "sim_weight": "Peso (kg)",
     "sim_cart_total": "Total carrito ({{currency}})",

@@ -2,8 +2,7 @@
   "nav": {
     "home": "Home",
     "shipping_rules": "Shipping Rules",
-    "billing": "Plans",
-    "quotes": "Quotes"
+    "billing": "Plans"
   },
   "home": {
     "title": "Delivery Rules",
@@ -343,6 +342,8 @@
     "sim_country": "Country",
     "sim_province": "State / Province",
     "sim_city": "City",
+    "sim_origin": "Simulate shipping from",
+    "sim_origin_auto": "Automatic (no filter)",
     "sim_city_placeholder": "e.g. Medellín",
     "sim_weight": "Weight (kg)",
     "sim_cart_total": "Cart total ({{currency}})",

@@ -30,7 +30,7 @@ export async function getWarehouses(admin) {
             id
             name
             isActive
-            address { city province provinceCode zip address1 countryCode }
+            address { city province provinceCode }
           }
         }
       }
@@ -51,9 +51,6 @@ export async function getWarehouses(admin) {
           province,
           provinceSlug: toSlug(province),
           city: loc.address?.city || "",
-          zip: loc.address?.zip || "",
-          address1: loc.address?.address1 || "",
-          country: loc.address?.countryCode || "",
           isActive: loc.isActive,
         };
       });
