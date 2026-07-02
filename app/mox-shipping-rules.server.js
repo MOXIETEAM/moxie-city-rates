@@ -465,6 +465,46 @@ export async function createZone(shop, department, enabledServices, country = "C
   return prisma.shippingZone.create({ data });
 }
 
+/**
+ * Duplica una zona hacia OTRO departamento: get-or-create la zona destino
+ * (mismo país que la origen) y copia todas sus tarifas con sus condiciones.
+ * La zona destino conserva sus tarifas existentes (las copiadas se suman).
+ * Retorna { zone, ratesCopied, zoneCreated }.
+ */
+export async function duplicateZoneTo(shop, sourceZoneId, targetDepartment) {
+  const source = await prisma.shippingZone.findFirst({
+    where: { id: sourceZoneId, shop },
+    include: { rates: true },
+  });
+  if (!source) throw new Error("Zone not found or unauthorized");
+  const country = source.country || "CO";
+  const slug = zoneSlugForCountry(country, targetDepartment);
+  if (slug === source.slug) throw new Error("Target department equals source");
+
+  let zone = await prisma.shippingZone.findUnique({ where: { shop_slug: { shop, slug } } });
+  const zoneCreated = !zone;
+  if (!zone) {
+    zone = await prisma.shippingZone.create({
+      data: {
+        shop,
+        department: targetDepartment,
+        slug,
+        country,
+        enabledServices: source.enabledServices,
+      },
+    });
+  }
+
+  let ratesCopied = 0;
+  for (const rate of source.rates) {
+    const { id: _id, createdAt: _c, updatedAt: _u, zoneId: _z, ...fields } = rate;
+    await prisma.shippingRate.create({ data: { ...fields, zone: { connect: { id: zone.id } } } });
+    ratesCopied++;
+  }
+  invalidateProductConditionFields(shop);
+  return { zone, ratesCopied, zoneCreated };
+}
+
 export async function updateZoneEnabledServices(shop, zoneId, enabledServices) {
   if (!Array.isArray(enabledServices) || enabledServices.length === 0) {
     throw new Error("enabledServices must be a non-empty array");
@@ -511,6 +551,7 @@ export async function saveRate({
   minDeliveryDays,
   maxDeliveryDays,
   warehouseId,
+  perItemPrice,
 }) {
   // Normaliza valores legacy hacia el modelo nuevo al guardar: el runtime
   // sigue aceptando include_tags/exclude_tags para filas viejas no re-guardadas.
@@ -584,6 +625,8 @@ export async function saveRate({
     maxDeliveryDays: maxDays,
     // "" o ausente → null = bodega derivada por ubicación (no override).
     warehouseId: warehouseId ? String(warehouseId) : null,
+    // Modo per_item: precio por cada ítem adicional (>= 0).
+    perItemPrice: Math.max(0, parseFloat(perItemPrice) || 0),
   };
 
   if (id) {

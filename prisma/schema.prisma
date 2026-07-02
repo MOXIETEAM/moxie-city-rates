@@ -152,7 +152,10 @@ model ShippingRate {
   // y Shopify los muestra bajo la tarifa ("Llega entre el X y el Y").
   minDeliveryDays Int?
   maxDeliveryDays Int?
-  pricingMode     String       @default("flat")  // "flat" | "weight_tiers" | "cart_total"
+  pricingMode     String       @default("flat")  // "flat" | "weight_tiers" | "cart_total" | "per_item"
+  // Modo per_item: `price` cubre el primer ítem y `perItemPrice` cada ítem
+  // adicional (total = price + perItemPrice × (unidades − 1)).
+  perItemPrice    Float        @default(0)
   weightTiers     String       @default("[]")    // JSON: [{"minKg":0,"maxKg":1,"price":12000},...]
   cartTotalTiers  String       @default("[]")    // JSON: [{"minAmount":0,"maxAmount":100000,"price":12000},...]
   // Bodega de origen — SOLO display/organización en el admin. NO afecta el

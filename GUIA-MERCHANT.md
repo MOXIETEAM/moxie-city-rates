@@ -1,92 +1,119 @@
-# Guía de configuración — Fletix
+# Guía de configuración — Delivery Rules (Fletix)
 
-Esta guía explica cómo configurar Fletix paso a paso desde el admin de tu tienda Shopify.
+Esta guía explica cómo configurar la app paso a paso desde el admin de tu tienda Shopify.
 
 ---
 
 ## 1. Instalación
 
-Después de instalar Fletix desde el Partner Dashboard o el App Store:
+Después de instalar la app desde el Partner Dashboard o el App Store:
 
 1. La app se abre automáticamente en el admin de Shopify.
-2. Fletix registra un **carrier service** llamado "Fletix" (visible en *Settings → Shipping and delivery → Custom rates*).
+2. Se registra un **carrier service** (visible en *Settings → Shipping and delivery → Custom rates*).
 3. Se crea automáticamente la **metafield definition** `fletix.shipping_rules` con acceso de lectura desde el storefront.
+4. Se detectan tus **Locations** (bodegas) de Shopify para derivar la bodega de origen de cada tarifa.
 
 No requiere configuración manual en este paso.
 
----
-
-## 2. Crear zonas de envío
-
-Una **zona** representa un departamento (en Colombia) o región. Cada zona puede tener varias **tarifas** (rates).
-
-1. En el admin de Fletix, ir a **Reglas de envío**.
-2. Click en **Agregar zona** → seleccionar el departamento.
-3. La zona queda activa por defecto. Podés desactivarla con el toggle.
-
-> 💡 **Zona `_default`**: Existe una zona especial llamada `_default` que actúa como fallback cuando ninguna zona específica del destino define el método solicitado. Útil para "envío estándar a todo el país".
+> ⚠️ **Importante**: si tenés tarifas manuales configuradas en *Settings → Shipping and delivery* (o **Local delivery** con radio de envío gratis), Shopify las muestra JUNTO a las de la app. Para que solo salgan las tarifas de la app, eliminá las manuales de la zona y desactivá Local delivery (o dejale un radio mínimo).
 
 ---
 
-## 3. Crear tarifas dentro de una zona
+## 2. Navegación
+
+La página **Reglas de envío** se organiza en 4 pestañas:
+
+| Pestaña | Qué hacés ahí |
+|---|---|
+| **Zonas** | Ver zonas creadas, agregar departamento, umbral de match de ciudad, guía de nombres |
+| **Tarifas** | Buscar/crear/editar tarifas agrupadas por departamento (acordeones) |
+| **Consultar** | Simulador de tarifas + log de cotizaciones del checkout real |
+| **Carga masiva** | Importar/exportar tarifas por CSV |
+
+---
+
+## 3. Crear zonas de envío
+
+Una **zona** representa un departamento (Colombia) o región. Cada zona puede tener varias **tarifas**.
+
+1. Pestaña **Zonas** → seleccionar país y departamento → **Agregar zona**.
+2. Al crear la zona se detectan los servicios disponibles según tus Locations.
+3. También podés crear la zona **al vuelo** desde el modal "Nueva tarifa" (ver abajo).
+
+> 💡 **Tarifa por defecto**: existe una zona especial (fallback) que aplica cuando el destino no tiene zona propia, por método de envío. Útil para "envío estándar a todo el país".
+
+> 💡 **Duplicar zona**: dentro del acordeón de una zona (pestaña Tarifas) podés duplicarla hacia otro departamento — copia todas sus tarifas.
+
+---
+
+## 4. Crear tarifas
+
+Desde la pestaña **Tarifas**:
+
+- Botón **Nueva tarifa** → modal de 2 pasos: (1) elegí uno o varios departamentos del catálogo (si la zona no existe se crea sola), (2) completá el formulario. La tarifa se crea en cada departamento elegido.
+- Botón **Agregar tarifa** en el header de cada zona → abre el mismo modal directo al paso 2.
 
 Cada tarifa define:
 
 | Campo | Descripción | Ejemplo |
 |---|---|---|
 | **Nombre** | Lo que ve el cliente en el checkout | "Envío Estándar" |
-| **Tipo de servicio** | Se elige de un dropdown: *Envío estándar*, *Envío express*, *Recoger en tienda* | Envío Estándar |
-| **Precio** | Tarifa fija en COP | `12500` |
-| **Modo de precios** | `flat`, `weight`, `cart_total` | `flat` |
-| **Condición de ciudad** | `all`, `include`, `exclude` | `include` |
-| **Ciudades** | Lista (cuando condición ≠ `all`) | `MEDELLÍN, ENVIGADO, SABANETA` |
-| **Condición de productos** | `all`, `include_tags`, `exclude_tags` | `all` |
-| **Tags de producto** | Lista (cuando condición ≠ `all`) | `frozen, fresh` |
-| **Horario** | `timeFrom` / `timeTo` (24h) y días | `09:00 - 18:00`, lunes a viernes |
+| **Tipo de servicio** | *Envío estándar*, *Envío express*, *Recoger en tienda* | Envío Estándar |
+| **Precio** | En la moneda de la tienda | `12500` |
+| **Modo de precio** | `flat`, por peso, por monto del carrito, por ítem | `flat` |
+| **Bodega de origen** | A qué Location aplica la tarifa (o "Todas") | Bodega Medellín |
+| **Condición de ciudad** | `all`, `include`, `exclude` + alias por ciudad | `include` |
+| **Condición de producto** | Por tags, vendor, tipo, colección o SKU | tags: `frozen` |
+| **Estimado de entrega** | Min/máx días calendario (visible en checkout) | 2–4 días |
+| **Horario** | Ventana horaria + días de la semana | `09:00–18:00`, lun–vie |
 
-### Modos de precios
+### Modos de precio
 
-- **`flat`** — precio único (campo `price`).
-- **`weight`** — tarifa por tiers de peso. Ej: 0–5kg = $10K, 5–10kg = $15K.
-- **`cart_total`** — tarifa por tiers de total del carrito. Ej: < $50K = $10K, ≥ $50K = gratis.
+- **Precio fijo** — precio único.
+- **Por peso** — tiers de peso. Ej: 0–5kg = $10K, 5–15kg = $20K. *(Pro)*
+- **Por monto del carrito** — tiers por total. Ej: < $200K = $15K, ≥ $200K = gratis. *(Pro)*
+- **Por ítem** — primer ítem a precio base + cada ítem adicional a otro precio. Total = base + adicional × (unidades − 1).
 
-### Condición de ciudad
+### Bodega de origen
 
-- **`all`** — la tarifa aplica a cualquier ciudad del departamento (sin filtrar).
-- **`include`** — solo aplica a las ciudades listadas.
-- **`exclude`** — aplica a todas las ciudades del departamento **excepto** las listadas.
+- Cada tarifa puede asignarse a una **bodega** (Shopify Location) o a "Todas las bodegas".
+- En checkout, cuando Shopify parte el pedido por bodega (multi-location), solo aplican las tarifas de la bodega que despacha + las de "Todas".
+- **La app NO decide qué bodega despacha** — eso lo resuelve Shopify según inventario y prioridad de ubicaciones (*Settings → Shipping → Order routing*).
+- Red de seguridad: si el filtro por bodega dejara el checkout sin tarifas, la app devuelve las tarifas sin filtrar (nunca bloquea la compra).
+- Para multi-bodega real necesitás **inventario rastreado por Location** y stock en cada bodega.
 
-### Horarios
+### Habilitar / deshabilitar
 
-- **Hora**: `timeFrom` y `timeTo` en formato 24h (ej: `08:00`, `20:00`). Vacío = 24/7.
-- **Días**: lista de días de la semana donde aplica. Vacío = todos los días.
-
-> ⚠️ Los horarios se evalúan en zona horaria `America/Bogota`.
-
----
-
-## 4. Tipos de servicio disponibles
-
-Al crear una tarifa, elegís uno de los tres tipos de servicio predefinidos:
-
-| Tipo | Significado |
-|---|---|
-| **Envío estándar** | Envío puerta a puerta convencional |
-| **Envío express** | Envío rápido (mismo día / siguiente día) |
-| **Recoger en tienda** | El cliente retira en una sucursal física |
-
-El **nombre** que pongas en cada tarifa (ej: "Envío Estándar Medellín") es lo que ve el cliente en el checkout. El **tipo de servicio** es una clasificación interna que Fletix usa para agrupar tarifas y para que el theme del storefront filtre productos disponibles por método.
+Cada tarifa tiene botón **Deshabilitar/Habilitar** — la apaga sin borrarla (no sale en checkout ni en el metafield).
 
 ---
 
-## 5. Sincronización al storefront
+## 5. Consultar (simulador + log)
 
-Cada vez que guardás una zona o tarifa, Fletix:
+Pestaña **Consultar**:
 
-1. Actualiza el metafield `fletix.shipping_rules` (JSON con todas las reglas activas).
-2. *(Transitorio)* También escribe a `mox_store_promise.shipping_rules` para retrocompatibilidad con themes que aún no migraron.
+- **Simulador**: armá un destino (país, departamento, ciudad) + carrito ficticio (peso, total, tags/atributos de producto) y corré el MISMO pipeline del checkout. Muestra las tarifas devueltas, la bodega de origen que resolvería y una tabla con la decisión por regla (por qué aplicó o se descartó).
+- **Log de cotizaciones**: cada request real del checkout queda registrado (destino, carrito, decisiones, tarifas devueltas). Sirve para autodiagnosticar "¿por qué no salió mi tarifa?".
 
-El metafield es **público** para el storefront, accesible vía Liquid:
+---
+
+## 6. Carga masiva (CSV)
+
+Pestaña **Carga masiva** *(Pro)*:
+
+- **Exportar** las reglas actuales, **importar** un CSV, o **descargar plantilla** de ejemplo.
+- La guía "¿Cómo llenar el CSV?" documenta todas las columnas. Requeridas: `departamento`, `nombre_tarifa`, `tipo_servicio`, `precio`. Opcionales: ciudades, alias, horarios, tiers, condición de producto, país, **bodega** (nombre de la Location) y **alias_ciudades**.
+
+---
+
+## 7. Sincronización al storefront
+
+Cada vez que guardás una zona o tarifa, la app:
+
+1. Actualiza el metafield `fletix.shipping_rules` (JSON con las reglas activas).
+2. *(Transitorio)* También escribe a `mox_store_promise.shipping_rules` para retrocompatibilidad.
+
+Accesible vía Liquid:
 
 ```liquid
 {{ shop.metafields.fletix.shipping_rules }}
@@ -94,88 +121,90 @@ El metafield es **público** para el storefront, accesible vía Liquid:
 
 ---
 
-## 6. Carrier service en checkout
+## 8. Carrier service en checkout
 
-Durante el checkout, Shopify llama al endpoint de Fletix con la dirección destino y los items del carrito. Fletix:
+Durante el checkout, Shopify llama al endpoint de la app con la dirección destino, el origen (bodega que despacha) y los items. La app:
 
 1. Resuelve el departamento (código ISO → slug interno).
-2. Homologa la ciudad escrita por el cliente contra el catálogo (resolver fuzzy + alias).
-3. Filtra reglas activas por: departamento + ciudad + horario + día.
-4. Si los items del carrito tienen `_mox_service_code` (preseleccionado en PDP), filtra por ese código. Si no, devuelve todas las tarifas aplicables.
-5. Devuelve hasta N tarifas en <100ms.
+2. Homologa la ciudad escrita por el cliente (resolver fuzzy + alias, umbral configurable en Zonas).
+3. Resuelve la **bodega de origen** por ciudad de la Location.
+4. Filtra reglas por: departamento + ciudad + bodega + horario + producto.
+5. Si los items tienen `_mox_service_code` (preseleccionado en PDP), filtra por ese método.
+6. Devuelve las tarifas con precio según su modo (fijo / peso / monto / por ítem) y estimado de entrega.
 
 ---
 
-## 7. Validación de checkout (Shopify Function)
+## 9. Validación de checkout (Shopify Function)
 
-Fletix incluye una **Validation Function** que bloquea el checkout cuando:
+La app incluye una **Validation Function** que bloquea el checkout cuando:
 
-- Un item del carrito tiene un service code preseleccionado que **no está disponible** en la dirección final.
-- Un item está marcado para pickup en un departamento distinto al de la dirección final.
+- Un item tiene un service code preseleccionado **no disponible** en la dirección final.
+- Un item está marcado para pickup en un departamento distinto al de la dirección.
 
 Para activarla:
 
-1. En el admin: **Settings → Checkout → Checkout rules → Add rule**.
-2. Seleccionar **"Fletix: Validación de Checkout"**.
-3. Guardar.
+1. **Settings → Checkout → Checkout rules → Add rule**.
+2. Seleccionar la validación de la app y guardar.
 
-> ⚠️ Las validation functions de Shopify requieren **activación manual** del merchant — no se prenden solas.
-
----
-
-## 8. Calculadora de tarifas en PDP (plan Pro)
-
-Fletix incluye un bloque de tema **"Fletix Rate Calculator"** que muestra una calculadora en la PDP donde el cliente puede ingresar departamento + ciudad y ver tarifas disponibles antes de llegar al checkout.
-
-1. En el admin: **Online Store → Themes → Customize**.
-2. En la PDP, agregar el bloque "Fletix Rate Calculator".
-3. Guardar.
-
-> Requiere plan Pro de Fletix.
+> ⚠️ Las validation functions requieren **activación manual** del merchant.
 
 ---
 
-## 9. Plan Free vs Pro
+## 10. Calculadora de tarifas en PDP (plan Pro)
+
+Bloque de tema **"Rate Calculator"**: el cliente ingresa departamento + ciudad en la PDP y ve tarifas antes del checkout.
+
+1. **Online Store → Themes → Customize** → agregar el bloque en la PDP.
+
+---
+
+## 11. Plan Free vs Pro
 
 | Feature | Free | Pro |
 |---|---|---|
-| Zonas configurables | hasta N | ilimitadas |
-| Tarifas por zona | hasta M | ilimitadas |
-| Tarifa plana | ✅ | ✅ |
-| Carrier service en checkout | ✅ | ✅ |
-| Resolver fuzzy de ciudades | ✅ | ✅ |
-| Metafield público para themes | ✅ | ✅ |
-| Calculadora de tarifas en PDP | ❌ | ✅ |
+| Zonas / tarifas | limitadas | ilimitadas |
+| Tarifa plana / por ítem | ✅ | ✅ |
+| Carrier service + fuzzy de ciudades | ✅ | ✅ |
+| Bodega de origen por tarifa | ✅ | ✅ |
+| Metafield público | ✅ | ✅ |
 | Tarifas por peso / por carrito | ❌ | ✅ |
-| Horarios y días de la semana | ❌ | ✅ |
-| Importar tarifas desde CSV | ❌ | ✅ |
-| Filtros por tags de producto | ❌ | ✅ |
+| Horarios y días | ❌ | ✅ |
+| CSV import/export | ❌ | ✅ |
+| Condición de producto | ❌ | ✅ |
+| Calculadora PDP | ❌ | ✅ |
 
 Detalles exactos en `app/utils/billing.server.js`.
 
 ---
 
-## 10. Troubleshooting
+## 12. Troubleshooting
 
-### El carrier service no devuelve tarifas en el checkout
+### El carrier no devuelve tarifas en checkout
 
-- Verificá en *Settings → Shipping → Custom rates* que "Fletix" esté activo.
-- Verificá que el departamento del destino tenga al menos una zona configurada en Fletix.
-- Si los line items tienen `_mox_service_code`, asegurate de que la zona del destino tenga una tarifa con ese mismo service code.
+- Verificá en *Settings → Shipping → Custom rates* que el carrier esté activo.
+- Verificá que el destino tenga zona configurada (o una tarifa por defecto).
+- Usá la pestaña **Consultar**: simulá el destino y mirá la decisión por regla.
+- Si los items tienen `_mox_service_code`, la zona debe tener tarifa con ese método.
+
+### Aparecen tarifas que no configuré (ej. envío gratis)
+
+- Son tarifas **manuales de Shopify** o **Local delivery** — ver sección 1.
+
+### Una tarifa con bodega asignada no sale
+
+- Shopify decidió despachar desde otra bodega (inventario). Revisá *Order routing* y el stock por Location, o poné la tarifa en "Todas las bodegas".
 
 ### El storefront no filtra por reglas
 
-- Verificá que el metafield exista: GraphiQL → `query { shop { metafield(namespace: "fletix", key: "shipping_rules") { value } } }`.
-- Si está vacío, abrí cualquier zona en el admin y guardá → fuerza un sync.
-- Verificá que el theme lea desde `shop.metafields.fletix.shipping_rules` (o desde `shop.metafields.mox_store_promise.shipping_rules` si aún no migró).
+- GraphiQL: `query { shop { metafield(namespace: "fletix", key: "shipping_rules") { value } } }`.
+- Si está vacío, guardá cualquier tarifa → fuerza sync.
 
 ### La validación de checkout no bloquea
 
-- Confirmá que activaste la rule en *Settings → Checkout → Checkout rules*.
-- Las validation functions requieren activación manual del merchant.
+- Confirmá la rule en *Settings → Checkout → Checkout rules* (activación manual).
 
 ---
 
 ## Soporte
 
-Para reportar bugs o pedir features, abrí un issue en el repositorio o contactá al equipo de Fletix.
+Para reportar bugs o pedir features, contactá al equipo.

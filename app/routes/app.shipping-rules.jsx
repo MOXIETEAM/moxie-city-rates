@@ -13,6 +13,7 @@ import {
   getOrCreateDefaultZoneForCountry,
   syncRulesToMetafield,
   updateZoneEnabledServices,
+  duplicateZoneTo,
 } from "../mox-shipping-rules.server";
 import { createTranslator, getLocale } from "../utils/i18n";
 import { debug, error as logError } from "../utils/logger.server";
@@ -158,7 +159,8 @@ function parseCSVContent(csvText, t) {
     }
 
     const pricingMode = pricingModeStr === "weight_tiers" ? "weight_tiers"
-      : pricingModeStr === "cart_total" ? "cart_total" : "flat";
+      : pricingModeStr === "cart_total" ? "cart_total"
+      : pricingModeStr === "per_item" ? "per_item" : "flat";
 
     // parseFloat (no parseInt): los precios pueden tener decimales (USD 12.99).
     const price = parseFloat(priceStr);
@@ -485,6 +487,39 @@ export const action = async ({ request }) => {
       return { success: true, message: t("action.zone_services_updated") };
     }
 
+    if (intent === "duplicate_zone") {
+      // Duplicar zona hacia otro departamento (copia todas las tarifas).
+      const sourceZoneId = formData.get("zoneId");
+      const targetDepartment = String(formData.get("target_department") || "").trim();
+      if (!targetDepartment) return { error: t("action.select_department") };
+
+      // Límites del plan: zona nueva (si no existe) + tarifas resultantes.
+      const source = await prisma.shippingZone.findFirst({
+        where: { id: sourceZoneId, shop: session.shop },
+        include: { rates: { select: { id: true } } },
+      });
+      if (!source) return { error: t("action.unexpected_error") };
+      const targetSlug = zoneSlugForCountry(source.country || "CO", targetDepartment);
+      const existingTarget = await prisma.shippingZone.findUnique({
+        where: { shop_slug: { shop: session.shop, slug: targetSlug } },
+        include: { rates: { select: { id: true } } },
+      });
+      if (!existingTarget) {
+        const zonesCount = await prisma.shippingZone.count({ where: { shop: session.shop } });
+        if (!checkLimit(planInfo, "zones", zonesCount)) {
+          return { error: t("billing.limit_zones", { max: planInfo.limits.maxZones }) };
+        }
+      }
+      const resultingRates = (existingTarget?.rates.length || 0) + source.rates.length;
+      if (resultingRates > planInfo.limits.maxRatesPerZone) {
+        return { error: t("billing.limit_rates", { max: planInfo.limits.maxRatesPerZone }) };
+      }
+
+      const dup = await duplicateZoneTo(session.shop, sourceZoneId, targetDepartment);
+      await syncRulesToMetafield(admin, session.shop);
+      return { success: true, message: t("action.zone_duplicated", { dept: targetDepartment, n: dup.ratesCopied }) };
+    }
+
     if (intent === "delete_zone") {
       const zoneId = formData.get("zoneId");
       await deleteZone(zoneId, session.shop);
@@ -591,6 +626,7 @@ export const action = async ({ request }) => {
         minDeliveryDays: formData.get("minDeliveryDays"),
         maxDeliveryDays: formData.get("maxDeliveryDays"),
         warehouseId: formData.get("warehouseId") || null,
+        perItemPrice: formData.get("perItemPrice") || 0,
       };
 
       if (rateId) {
@@ -630,6 +666,20 @@ export const action = async ({ request }) => {
       }
       await syncRulesToMetafield(admin, session.shop);
       return { success: true, message: t("action.rate_saved") };
+    }
+
+    if (intent === "toggle_rate") {
+      // Habilitar/deshabilitar tarifa sin borrarla. Checkout y metafield ya
+      // excluyen las deshabilitadas (enabled: false) — solo cambia el flag.
+      const rateId = formData.get("rateId");
+      const enabled = formData.get("enabled") === "true";
+      const existing = await prisma.shippingRate.findFirst({
+        where: { id: rateId, zone: { shop: session.shop } },
+      });
+      if (!existing) return { error: t("action.unexpected_error") };
+      await prisma.shippingRate.update({ where: { id: rateId }, data: { enabled } });
+      await syncRulesToMetafield(admin, session.shop);
+      return { success: true, message: enabled ? t("action.rate_enabled") : t("action.rate_disabled") };
     }
 
     if (intent === "delete_rate") {
@@ -1337,7 +1387,7 @@ function RateForm({ rate, zoneId, zoneSlug, createCountry, createDepartments, de
               style={{ maxWidth: "140px" }}
             />
           )}
-          {pricingMode !== "flat" && (
+          {(pricingMode === "weight_tiers" || pricingMode === "cart_total") && (
             <input type="hidden" name="price" value="0" />
           )}
         </s-stack>
@@ -1428,9 +1478,46 @@ function RateForm({ rate, zoneId, zoneSlug, createCountry, createDepartments, de
               />
               {t("shipping.by_cart_total")}
             </label>
+            <label style={{ display: "flex", alignItems: "center", gap: "4px", cursor: "pointer" }}>
+              <input
+                type="radio"
+                checked={pricingMode === "per_item"}
+                onChange={() => setPricingMode("per_item")}
+              />
+              {t("shipping.per_item")}
+            </label>
           </s-stack>
           {(!allowWeight || !allowCart) && <ProFeatureNotice t={t} />}
         </div>
+
+        {pricingMode === "per_item" && (
+          <div>
+            <s-stack direction="inline" gap="base">
+              <s-text-field
+                label={t("shipping.per_item_first", { currency })}
+                name="price"
+                type="number"
+                step="any"
+                min="0"
+                value={String(rate?.price || "")}
+                required
+                style={{ maxWidth: "160px" }}
+              />
+              <s-text-field
+                label={t("shipping.per_item_extra", { currency })}
+                name="perItemPrice"
+                type="number"
+                step="any"
+                min="0"
+                value={rate?.perItemPrice != null ? String(rate.perItemPrice) : ""}
+                style={{ maxWidth: "160px" }}
+              />
+            </s-stack>
+            <div style={{ marginTop: 4 }}>
+              <s-text variant="bodySm" tone="subdued">{t("shipping.per_item_hint")}</s-text>
+            </div>
+          </div>
+        )}
 
         {pricingMode === "weight_tiers" && (
           <WeightTierEditor tiers={weightTiers} onChange={setWeightTiers} t={t} />
@@ -1718,7 +1805,9 @@ function RateForm({ rate, zoneId, zoneSlug, createCountry, createDepartments, de
 function RateCard({ rate, zoneId, zoneSlug, department, t, planInfo, enabledServices }) {
   const deleteFetcher = useFetcher();
   const duplicateFetcher = useFetcher();
+  const toggleFetcher = useFetcher();
   const isDuplicating = duplicateFetcher.state !== "idle";
+  const isToggling = toggleFetcher.state !== "idle";
   const currency = useShopCurrency();
   const warehouses = useWarehouses();
   const [editing, setEditing] = useState(false);
@@ -1752,6 +1841,7 @@ function RateCard({ rate, zoneId, zoneSlug, department, t, planInfo, enabledServ
 
   const isWeightTiers = rate.pricingMode === "weight_tiers";
   const isCartTotal = rate.pricingMode === "cart_total";
+  const isPerItem = rate.pricingMode === "per_item";
   const weightTiersList = isWeightTiers ? JSON.parse(rate.weightTiers || "[]") : [];
   const cartTotalTiersList = isCartTotal ? JSON.parse(rate.cartTotalTiers || "[]") : [];
 
@@ -1782,6 +1872,7 @@ function RateCard({ rate, zoneId, zoneSlug, department, t, planInfo, enabledServ
       borderRadius: "10px",
       border: "1px solid #e3e3e3",
       background: "#fff",
+      opacity: rate.enabled ? 1 : 0.55,
     }}>
       <div style={{ display: "flex", flexDirection: "column", gap: "4px" }}>
         <div style={{ display: "flex", alignItems: "center", gap: "8px", flexWrap: "wrap" }}>
@@ -1793,6 +1884,16 @@ function RateCard({ rate, zoneId, zoneSlug, department, t, planInfo, enabledServ
             <s-badge tone="info">{t("shipping.by_weight")}</s-badge>
           ) : isCartTotal ? (
             <s-badge tone="info">{t("shipping.by_cart_total")}</s-badge>
+          ) : isPerItem ? (
+            <>
+              <s-badge tone="info">{t("shipping.per_item")}</s-badge>
+              <span style={{ fontWeight: 700, fontSize: "14px" }}>
+                {formatMoney(rate.price, currency)}
+                <span style={{ fontWeight: 400, fontSize: "12px", color: "#666" }}>
+                  {" "}+ {formatMoney(rate.perItemPrice || 0, currency)} {t("shipping.per_item_each")}
+                </span>
+              </span>
+            </>
           ) : (
             <span style={{ fontWeight: 700, fontSize: "14px" }}>
               {rate.price > 0 ? formatMoney(rate.price, currency) : t("shipping.free")}
@@ -1857,6 +1958,20 @@ function RateCard({ rate, zoneId, zoneSlug, department, t, planInfo, enabledServ
         </div>
       </div>
       <div style={{ display: "flex", gap: "4px", alignItems: "center" }}>
+        <toggleFetcher.Form method="post" style={{ display: "flex", alignItems: "center" }}>
+          <input type="hidden" name="_intent" value="toggle_rate" />
+          <input type="hidden" name="rateId" value={rate.id} />
+          <input type="hidden" name="enabled" value={rate.enabled ? "false" : "true"} />
+          <s-button
+            type="submit"
+            variant="tertiary"
+            size="small"
+            loading={isToggling}
+            title={rate.enabled ? t("shipping.disable_rate") : t("shipping.enable_rate")}
+          >
+            {rate.enabled ? t("shipping.disable_rate") : t("shipping.enable_rate")}
+          </s-button>
+        </toggleFetcher.Form>
         <s-button variant="tertiary" size="small" onClick={() => setEditing(true)}>{t("shipping.edit")}</s-button>
         <duplicateFetcher.Form method="post">
           <input type="hidden" name="_intent" value="duplicate_rate" />
@@ -1964,10 +2079,12 @@ function ZoneServicesEditor({ zone, enabledServices, t }) {
   );
 }
 
-function ZoneSection({ zone, t, planInfo, shopCountry, countryName, searchQuery = "", onAddRate }) {
+function ZoneSection({ zone, t, planInfo, shopCountry, countryName, searchQuery = "", onAddRate, dupTargets = [] }) {
   const currency = useShopCurrency();
   const isForeign = zone.country && shopCountry && zone.country !== shopCountry;
   const deleteFetcher = useFetcher();
+  const duplicateZoneFetcher = useFetcher();
+  const isDuplicatingZone = duplicateZoneFetcher.state !== "idle";
   const isDeleting = deleteFetcher.state !== "idle";
   const canAddRate = zone.rates.length < planInfo.limits.maxRatesPerZone;
   // Acordeón: colapsado por defecto, se ve todo al desplegar.
@@ -2046,6 +2163,26 @@ function ZoneSection({ zone, t, planInfo, shopCountry, countryName, searchQuery 
 
           {!canAddRate && (
             <s-text variant="bodySm" tone="subdued">{t("shipping.limit_rates_per_zone_ui")}</s-text>
+          )}
+
+          {/* Duplicar zona: copia todas las tarifas hacia otro departamento del
+              catálogo (excluye los que ya tienen zona — sin errores de tipeo). */}
+          {dupTargets.length > 0 && (
+            <duplicateZoneFetcher.Form method="post">
+              <input type="hidden" name="_intent" value="duplicate_zone" />
+              <input type="hidden" name="zoneId" value={zone.id} />
+              <s-stack direction="inline" gap="small-200" style={{ alignItems: "center", flexWrap: "wrap" }}>
+                <span style={{ fontSize: 13, color: "#666" }}>{t("shipping.duplicate_zone_label")}</span>
+                <select name="target_department" style={{ padding: "6px 10px", borderRadius: 8, border: "1px solid #ccc", fontSize: 13 }}>
+                  {dupTargets.map((d) => (
+                    <option key={d} value={d}>{d}</option>
+                  ))}
+                </select>
+                <s-button type="submit" variant="secondary" size="small" loading={isDuplicatingZone}>
+                  {t("shipping.duplicate_zone_btn")}
+                </s-button>
+              </s-stack>
+            </duplicateZoneFetcher.Form>
           )}
 
           <deleteFetcher.Form method="post">
@@ -2398,6 +2535,13 @@ export default function ShippingRules() {
   const isCsvLoading = csvFetcher.state !== "idle";
 
   const existingSlugs = new Set(zones.map((z) => z.slug));
+  // Destinos válidos para "duplicar zona": catálogo del país de la zona menos
+  // los departamentos que ya tienen zona (selector, sin errores de tipeo).
+  const dupTargetsFor = (zone) => {
+    const zc = (zone.country || shopCountry || "CO").toUpperCase();
+    const catalog = subdivisionsByCountry?.[zc] || [];
+    return catalog.filter((d) => !existingSlugs.has(zoneSlugForCountry(zc, d)));
+  };
   // Pa\u00eds seleccionado en el formulario "Agregar zona" (multi-mercado).
   const [newZoneCountry, setNewZoneCountry] = useState(shopCountry);
   // Subdivisiones del pa\u00eds seleccionado. Pa\u00eds sin cat\u00e1logo \u2192 texto libre.
@@ -2695,7 +2839,7 @@ export default function ShippingRules() {
       )}
 
       {zones.map((zone) => (
-        <ZoneSection key={zone.id} zone={zone} t={t} planInfo={planInfo} shopCountry={shopCountry} countryName={countryName} searchQuery={rateQuery} onAddRate={(z) => setNewRate({ departments: [z.department], country: z.country || shopCountry, step: 2 })} />
+        <ZoneSection key={zone.id} zone={zone} t={t} planInfo={planInfo} shopCountry={shopCountry} countryName={countryName} searchQuery={rateQuery} dupTargets={dupTargetsFor(zone)} onAddRate={(z) => setNewRate({ departments: [z.department], country: z.country || shopCountry, step: 2 })} />
       ))}
       </>
       )}

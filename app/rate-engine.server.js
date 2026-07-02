@@ -100,11 +100,25 @@ export function calculateCartTotal(items) {
   return totalSubunits / 100;
 }
 
+/** Total de unidades del carrito (suma de quantities). */
+export function calculateCartItemCount(items) {
+  let n = 0;
+  for (const item of items) n += item.quantity || 1;
+  return n;
+}
+
 /**
  * Resuelve el precio de una tarifa considerando su modo de pricing.
  * Retorna null cuando el peso/monto cae en un hueco entre tiers.
+ * `itemCount` (unidades del carrito) solo aplica al modo per_item.
  */
-export function resolveRatePrice(rate, cartWeightKg, cartTotal) {
+export function resolveRatePrice(rate, cartWeightKg, cartTotal, itemCount = 1) {
+  if (rate.pricingMode === "per_item") {
+    // Primer ítem = price; cada adicional = perItemPrice.
+    const extra = Math.max(0, (itemCount || 1) - 1);
+    return (rate.price || 0) + (rate.perItemPrice || 0) * extra;
+  }
+
   if (rate.pricingMode === "weight_tiers") {
     const tiers = JSON.parse(rate.weightTiers || "[]");
     if (!tiers.length) return rate.price;
@@ -142,10 +156,10 @@ export function resolveRatePrice(rate, cartWeightKg, cartTotal) {
 /**
  * De un array de rates con el mismo serviceCode, retorna la de menor precio.
  */
-export function pickBestRate(rates, cartWeightKg, cartTotal) {
+export function pickBestRate(rates, cartWeightKg, cartTotal, itemCount = 1) {
   let best = null;
   for (const rate of rates) {
-    const price = resolveRatePrice(rate, cartWeightKg, cartTotal);
+    const price = resolveRatePrice(rate, cartWeightKg, cartTotal, itemCount);
     if (price === null) continue;
     if (best === null || price < best.price) {
       best = { rate, price };
@@ -165,7 +179,7 @@ function rateOfferKey(rate) {
  * oferta (ej. por ciudad) → gana la más barata. Reglas con nombres distintos
  * son ofertas distintas → todas se muestran y el cliente elige en checkout.
  */
-export function deduplicateBestRates(rates, cartWeightKg, cartTotal) {
+export function deduplicateBestRates(rates, cartWeightKg, cartTotal, itemCount = 1) {
   const byKey = {};
   for (const rate of rates) {
     const key = rateOfferKey(rate);
@@ -175,7 +189,7 @@ export function deduplicateBestRates(rates, cartWeightKg, cartTotal) {
 
   const result = [];
   for (const key in byKey) {
-    const best = pickBestRate(byKey[key], cartWeightKg, cartTotal);
+    const best = pickBestRate(byKey[key], cartWeightKg, cartTotal, itemCount);
     if (best) result.push(best);
   }
   return result;
@@ -185,7 +199,7 @@ export function deduplicateBestRates(rates, cartWeightKg, cartTotal) {
  * Calcula una tarifa combinada cuando hay mezcla de métodos en el carrito.
  * Items de pickup (mox_pickup) no suman al precio de envío.
  */
-export function buildCombinedRate(items, allRates, cartWeightKg, cartTotal) {
+export function buildCombinedRate(items, allRates, cartWeightKg, cartTotal, itemCount = 1) {
   const codeToRates = {};
   for (const rate of allRates) {
     if (!codeToRates[rate.serviceCode]) codeToRates[rate.serviceCode] = [];
@@ -216,7 +230,7 @@ export function buildCombinedRate(items, allRates, cartWeightKg, cartTotal) {
       return null;
     }
 
-    const best = pickBestRate(candidates, cartWeightKg, cartTotal);
+    const best = pickBestRate(candidates, cartWeightKg, cartTotal, itemCount);
     if (!best) {
       debug(`[rate-engine] Combined rate inválida: "${code}" sin best rate (pickBestRate retornó null)`);
       return null;
@@ -255,11 +269,11 @@ export function buildCombinedRate(items, allRates, cartWeightKg, cartTotal) {
  *  - "lost_price": matcheó pero otra regla del mismo serviceCode fue más barata.
  *  - "method_not_selected": matcheó pero el carrito preseleccionó otro método.
  */
-function annotateSelection(trace, matchingRates, finalCodes, cartWeightKg, cartTotal) {
+function annotateSelection(trace, matchingRates, finalCodes, cartWeightKg, cartTotal, itemCount = 1) {
   if (!trace) return;
 
   const winnersByKey = {};
-  for (const entry of deduplicateBestRates(matchingRates, cartWeightKg, cartTotal)) {
+  for (const entry of deduplicateBestRates(matchingRates, cartWeightKg, cartTotal, itemCount)) {
     winnersByKey[rateOfferKey(entry.rate)] = entry;
   }
 
@@ -268,7 +282,7 @@ function annotateSelection(trace, matchingRates, finalCodes, cartWeightKg, cartT
     const ruleTrace = byId.get(rate.id);
     if (!ruleTrace || !ruleTrace.matched) continue;
 
-    const price = resolveRatePrice(rate, cartWeightKg, cartTotal);
+    const price = resolveRatePrice(rate, cartWeightKg, cartTotal, itemCount);
     if (price === null) {
       ruleTrace.reason = "tier_gap";
       continue;
@@ -322,6 +336,7 @@ export async function quoteShipping({ shop, destCountry, province, city, items, 
   // Cart total stays in the shop currency — cart_total tier thresholds are
   // configured by the merchant in their own currency, so no conversion.
   const cartTotal = calculateCartTotal(items);
+  const itemCount = calculateCartItemCount(items);
   const cartMethods = analyzeCartMethods(items);
 
   trace?.steps.push({
@@ -387,17 +402,17 @@ export async function quoteShipping({ shop, destCountry, province, city, items, 
 
   if (cartMethods.type === "single") {
     const candidates = matchingRates.filter((r) => r.serviceCode === cartMethods.code);
-    const best = pickBestRate(candidates, cartWeightKg, cartTotal);
+    const best = pickBestRate(candidates, cartWeightKg, cartTotal, itemCount);
     finalRates = best ? [best] : [];
     debug(`[rate-engine] Single method "${cartMethods.code}" → ${finalRates.length ? `$${best.price}` : "none"} (${candidates.length} candidate(s))`);
 
   } else if (cartMethods.type === "mixed") {
-    const combined = buildCombinedRate(items, matchingRates, cartWeightKg, cartTotal);
+    const combined = buildCombinedRate(items, matchingRates, cartWeightKg, cartTotal, itemCount);
     finalRates = combined ? [combined] : [];
     debug(`[rate-engine] Mixed methods ${cartMethods.codes.join("+")} → ${finalRates.length ? `$${combined.price}` : "none"}`);
 
   } else {
-    finalRates = deduplicateBestRates(matchingRates, cartWeightKg, cartTotal);
+    finalRates = deduplicateBestRates(matchingRates, cartWeightKg, cartTotal, itemCount);
     debug(`[rate-engine] Sin preselección → ${finalRates.length} rate(s)`);
   }
 
@@ -411,7 +426,7 @@ export async function quoteShipping({ shop, destCountry, province, city, items, 
         finalCodes.add(entry.rate ? entry.rate.serviceCode : entry.serviceCode);
       }
     }
-    annotateSelection(trace, matchingRates, finalCodes, cartWeightKg, cartTotal);
+    annotateSelection(trace, matchingRates, finalCodes, cartWeightKg, cartTotal, itemCount);
     trace.steps.push({
       step: "selection",
       mode: cartMethods.type,

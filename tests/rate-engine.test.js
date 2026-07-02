@@ -40,6 +40,19 @@ describe("resolveRatePrice", () => {
     expect(resolveRatePrice(flat({ price: 9000 }), 3, 50000)).toBe(9000);
   });
 
+  it("per_item: primer ítem + adicional × (n − 1)", () => {
+    const rate = flat({ pricingMode: "per_item", price: 10000, perItemPrice: 2000 });
+    expect(resolveRatePrice(rate, 0, 0, 1)).toBe(10000);
+    expect(resolveRatePrice(rate, 0, 0, 3)).toBe(14000);
+    // sin itemCount → asume 1 (retrocompatible con callers viejos)
+    expect(resolveRatePrice(rate, 0, 0)).toBe(10000);
+  });
+
+  it("per_item sin perItemPrice → solo precio base", () => {
+    const rate = flat({ pricingMode: "per_item", price: 8000 });
+    expect(resolveRatePrice(rate, 0, 0, 5)).toBe(8000);
+  });
+
   it("weight_tiers elige el rango correcto", () => {
     const rate = flat({
       pricingMode: "weight_tiers",
