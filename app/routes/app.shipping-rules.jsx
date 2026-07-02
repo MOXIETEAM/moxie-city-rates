@@ -70,8 +70,8 @@ const VALID_CONDITIONS = new Set(["all", "include", "exclude"]);
 const VALID_DAYS = new Set(["mon", "tue", "wed", "thu", "fri", "sat", "sun"]);
 
 function getCSVHeaders(locale) {
-  if (locale === "en") return "department,rate_name,service_type,price,city_condition,cities,description,from_time,to_time,days,pricing_mode,weight_ranges,cart_ranges,product_condition,product_tags,delivery_min_days,delivery_max_days,product_field,product_match_mode,country,warehouse,city_aliases";
-  return "departamento,nombre_tarifa,tipo_servicio,precio,condicion_ciudad,ciudades,descripcion,hora_desde,hora_hasta,dias,modo_precio,rangos_peso,rangos_monto,condicion_producto,tags_producto,entrega_min_dias,entrega_max_dias,campo_producto,modo_producto,pais,bodega,alias_ciudades";
+  if (locale === "en") return "department,rate_name,service_type,price,city_condition,cities,description,from_time,to_time,days,pricing_mode,weight_ranges,cart_ranges,product_condition,product_tags,delivery_min_days,delivery_max_days,product_field,product_match_mode,country,warehouse,city_aliases,per_item_price";
+  return "departamento,nombre_tarifa,tipo_servicio,precio,condicion_ciudad,ciudades,descripcion,hora_desde,hora_hasta,dias,modo_precio,rangos_peso,rangos_monto,condicion_producto,tags_producto,entrega_min_dias,entrega_max_dias,campo_producto,modo_producto,pais,bodega,alias_ciudades,precio_item_adicional";
 }
 
 /** Parsea una línea CSV respetando campos entre comillas. */
@@ -129,7 +129,7 @@ function parseCSVContent(csvText, t) {
       continue;
     }
 
-    const [dept, name, serviceCode, priceStr, condition, citiesStr, description, timeFrom, timeTo, daysStr, pricingModeStr, weightTiersStr, cartTotalTiersStr, productConditionStr, productTagsStr, minDeliveryStr, maxDeliveryStr, productFieldStr, productMatchModeStr, countryStr, warehouseStr, cityAliasesStr] = fields;
+    const [dept, name, serviceCode, priceStr, condition, citiesStr, description, timeFrom, timeTo, daysStr, pricingModeStr, weightTiersStr, cartTotalTiersStr, productConditionStr, productTagsStr, minDeliveryStr, maxDeliveryStr, productFieldStr, productMatchModeStr, countryStr, warehouseStr, cityAliasesStr, perItemPriceStr] = fields;
 
     // Accept any non-empty region name. Membership in a fixed list can't be
     // enforced internationally (zones now span multiple countries); the zone
@@ -229,6 +229,8 @@ function parseCSVContent(csvText, t) {
       // Nombre de bodega de origen (opcional) — se resuelve a warehouseId en el
       // import (necesita la lista de Locations / admin).
       warehouseName: (warehouseStr || "").trim(),
+      // Modo per_item: precio por cada ítem adicional (opcional).
+      perItemPrice: parseFloat(perItemPriceStr) || 0,
       description: description || "",
       timeFrom: timeFrom || null,
       timeTo: timeTo || null,
@@ -776,6 +778,7 @@ export const action = async ({ request }) => {
           cities: JSON.stringify(row.cities),
           cityAliases: JSON.stringify(row.cityAliases || {}),
           warehouseId: row.warehouseName ? (warehouseByName.get(normName(row.warehouseName)) || null) : null,
+          perItemPrice: row.perItemPrice,
           timeFrom: row.timeFrom,
           timeTo: row.timeTo,
           daysOfWeek: JSON.stringify(row.daysOfWeek),
@@ -2208,6 +2211,7 @@ function generateTemplateCSV(locale) {
     'Cundinamarca,Envío por peso,mox_envio,0,all,,,,,,weight_tiers,"0-5:10000;5-15:20000",,all,,2,5,tags,any,CO,,',
     'Cundinamarca,Gratis desde 200.000,mox_envio,0,all,,,,,,cart_total,,"0-200000:15000;200000-0:0",all,,2,5,tags,any,CO,,',
     'Antioquia,Refrigerado,mox_envio,25000,all,,Cadena de frío,,,,flat,,,include,congelados,1,2,collection,all,CO,,',
+    'Antioquia,Envío por ítem,mox_envio,10000,all,,Primer ítem 10.000 + 2.000 c/u adicional,,,,per_item,,,all,,2,4,tags,any,CO,,,2000',
     'Jalisco,Envío MX,mox_envio,150,all,,,,,,flat,,,all,,3,6,tags,any,MX,,',
   ];
   return [getCSVHeaders(locale), ...rows].join("\n");
@@ -2236,6 +2240,7 @@ const CSV_HELP_COLUMNS = [
   { es: "pais", en: "country", values: "ISO-2", example: "CO, MX, BR…" },
   { es: "bodega", en: "warehouse", values: "", example: "Bodega Medellín" },
   { es: "alias_ciudades", en: "city_aliases", values: "CANÓNICA>alias1|alias2;…", example: '"MEDELLÍN>medallo|medell"' },
+  { es: "precio_item_adicional", en: "per_item_price", values: "", example: "2000" },
 ];
 
 function CsvHelp({ t, locale }) {
@@ -2333,6 +2338,7 @@ function generateCSV(zones, locale, warehouses = []) {
         zone.country || "CO",
         csvField(rate.warehouseId ? (whById.get(rate.warehouseId) || "") : ""),
         aliasStr ? `"${aliasStr}"` : "",
+        rate.pricingMode === "per_item" ? (rate.perItemPrice || 0) : "",
       ];
       lines.push(fields.join(","));
     }

@@ -258,7 +258,8 @@
     "csv_col_16": "any = basta un producto del carrito; all = todos deben matchear.",
     "csv_col_17": "País de la zona (código de 2 letras). Vacío = país de tu tienda.",
     "csv_col_18": "Bodega de origen (nombre exacto de la Location). Vacío = aplica a cualquier origen. Solo display/scope, no fuerza el despacho.",
-    "csv_col_19": "Apodos de ciudad para el match en checkout. Formato CANÓNICA>alias1|alias2 separando ciudades con ;"
+    "csv_col_19": "Apodos de ciudad para el match en checkout. Formato CANÓNICA>alias1|alias2 separando ciudades con ;",
+    "csv_col_20": "Modo per_item: precio de cada ítem adicional (precio = primer ítem). Solo aplica con modo_precio per_item."
   },
   "action": {
     "zone_created": "Zona \"{{dept}}\" creada y sincronizada",

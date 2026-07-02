@@ -295,7 +295,9 @@ export default function Index() {
     (hasZones ? 1 : 0) + (data.hasDefault ? 1 : 0) + (data.hasCarrierRegistered ? 1 : 0);
   const setupPct = Math.round((setupDone / setupTotal) * 100);
 
-  const goRules = () => navigate("/app/shipping-rules");
+  // La página de reglas abre en la pestaña Zonas por defecto; cada paso del
+  // checklist lleva a la pestaña que corresponde.
+  const goRules = (tab) => () => navigate(`/app/shipping-rules${tab ? `?tab=${tab}` : ""}`);
 
   return (
     <div
@@ -456,21 +458,21 @@ export default function Index() {
             label={t("home.step_zones")}
             desc={t("home.step_zones_desc")}
             actionLabel={!hasZones ? t("home.step_action_rules") : undefined}
-            onAction={!hasZones ? goRules : undefined}
+            onAction={!hasZones ? goRules("zonas") : undefined}
           />
           <SetupStep
             done={data.hasDefault}
             label={t("home.step_default")}
             desc={t("home.step_default_desc")}
             actionLabel={hasZones && !data.hasDefault ? t("home.step_action_rules") : undefined}
-            onAction={hasZones && !data.hasDefault ? goRules : undefined}
+            onAction={hasZones && !data.hasDefault ? goRules("tarifas") : undefined}
           />
           <SetupStep
             done={data.hasCarrierRegistered}
             label={t("home.step_carrier")}
             desc={t("home.step_carrier_desc")}
             actionLabel={!data.hasCarrierRegistered ? t("home.step_action_carrier") : undefined}
-            onAction={!data.hasCarrierRegistered ? goRules : undefined}
+            onAction={!data.hasCarrierRegistered ? goRules() : undefined}
           />
         </div>
 
@@ -558,7 +560,7 @@ export default function Index() {
           <div style={{ fontSize: 16, fontWeight: 700, color: "#111213", marginBottom: 12 }}>{t("home.quick_actions")}</div>
           <button
             type="button"
-            onClick={goRules}
+            onClick={goRules()}
             style={{
               display: "flex",
               alignItems: "center",
