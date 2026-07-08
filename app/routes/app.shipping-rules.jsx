@@ -69,13 +69,44 @@ const VALID_SERVICE_CODES = new Set(["mox_envio", "mox_express", "mox_pickup"]);
 const VALID_CONDITIONS = new Set(["all", "include", "exclude"]);
 const VALID_DAYS = new Set(["mon", "tue", "wed", "thu", "fri", "sat", "sun"]);
 
+// Orden y nombres de columnas del CSV — fuente única para header, export,
+// parseo, plantilla y guía. Los 4 campos de precio (modo_precio, precio,
+// rangos_peso, rangos_monto) van juntos + precio_item_adicional, para no
+// confundir al merchant. El parseo es por NOMBRE de encabezado (no por
+// posición), así reordenar aquí no rompe archivos exportados antes.
+const CSV_COLUMNS = [
+  { key: "department", es: "departamento", en: "department" },
+  { key: "rate_name", es: "nombre_tarifa", en: "rate_name" },
+  { key: "service_type", es: "tipo_servicio", en: "service_type" },
+  { key: "pricing_mode", es: "modo_precio", en: "pricing_mode" },
+  { key: "price", es: "precio", en: "price" },
+  { key: "weight_ranges", es: "rangos_peso", en: "weight_ranges" },
+  { key: "cart_ranges", es: "rangos_monto", en: "cart_ranges" },
+  { key: "per_item_price", es: "precio_item_adicional", en: "per_item_price" },
+  { key: "city_condition", es: "condicion_ciudad", en: "city_condition" },
+  { key: "cities", es: "ciudades", en: "cities" },
+  { key: "description", es: "descripcion", en: "description" },
+  { key: "from_time", es: "hora_desde", en: "from_time" },
+  { key: "to_time", es: "hora_hasta", en: "to_time" },
+  { key: "days", es: "dias", en: "days" },
+  { key: "product_condition", es: "condicion_producto", en: "product_condition" },
+  { key: "product_tags", es: "tags_producto", en: "product_tags" },
+  { key: "delivery_min_days", es: "entrega_min_dias", en: "delivery_min_days" },
+  { key: "delivery_max_days", es: "entrega_max_dias", en: "delivery_max_days" },
+  { key: "product_field", es: "campo_producto", en: "product_field" },
+  { key: "product_match_mode", es: "modo_producto", en: "product_match_mode" },
+  { key: "country", es: "pais", en: "country" },
+  { key: "warehouse", es: "bodega", en: "warehouse" },
+  { key: "city_aliases", es: "alias_ciudades", en: "city_aliases" },
+];
+
 function getCSVHeaders(locale) {
-  if (locale === "en") return "department,rate_name,service_type,price,city_condition,cities,description,from_time,to_time,days,pricing_mode,weight_ranges,cart_ranges,product_condition,product_tags,delivery_min_days,delivery_max_days,product_field,product_match_mode,country,warehouse,city_aliases,per_item_price";
-  return "departamento,nombre_tarifa,tipo_servicio,precio,condicion_ciudad,ciudades,descripcion,hora_desde,hora_hasta,dias,modo_precio,rangos_peso,rangos_monto,condicion_producto,tags_producto,entrega_min_dias,entrega_max_dias,campo_producto,modo_producto,pais,bodega,alias_ciudades,precio_item_adicional";
+  return CSV_COLUMNS.map((c) => (locale === "en" ? c.en : c.es)).join(",");
 }
 
-/** Parsea una línea CSV respetando campos entre comillas. */
-function parseCSVLine(line) {
+/** Parsea una línea CSV respetando campos entre comillas. Separador configurable
+ * (`,` por defecto; Excel en español exporta con `;`). */
+function parseCSVLine(line, delimiter = ",") {
   const fields = [];
   let current = "";
   let inQuotes = false;
@@ -89,7 +120,7 @@ function parseCSVLine(line) {
       } else {
         inQuotes = !inQuotes;
       }
-    } else if (char === "," && !inQuotes) {
+    } else if (char === delimiter && !inQuotes) {
       fields.push(current.trim());
       current = "";
     } else {
@@ -100,6 +131,21 @@ function parseCSVLine(line) {
   return fields;
 }
 
+/** Detecta el separador del CSV mirando el encabezado: Excel en locales es/eu
+ * exporta con `;`. Cuenta separadores fuera de comillas y elige el dominante. */
+function detectDelimiter(headerLine) {
+  let commas = 0;
+  let semis = 0;
+  let inQuotes = false;
+  for (let i = 0; i < headerLine.length; i++) {
+    const ch = headerLine[i];
+    if (ch === '"') inQuotes = !inQuotes;
+    else if (!inQuotes && ch === ",") commas++;
+    else if (!inQuotes && ch === ";") semis++;
+  }
+  return semis > commas ? ";" : ",";
+}
+
 /** Parsea el contenido completo del CSV y retorna rows + errors. */
 function parseCSVContent(csvText, t) {
   const lines = csvText.split(/\r?\n/).filter((l) => l.trim());
@@ -107,7 +153,10 @@ function parseCSVContent(csvText, t) {
     return { rows: [], errors: [t("csv.min_rows")] };
   }
 
-  const firstLine = parseCSVLine(lines[0]).map((h) => h.toLowerCase().trim());
+  // Excel (locales es/eu) exporta CSV con `;`; el nuestro usa `,`. Autodetecta
+  // para que un archivo editado y guardado en Excel no descuadre las columnas.
+  const delimiter = detectDelimiter(lines[0]);
+  const firstLine = parseCSVLine(lines[0], delimiter).map((h) => h.toLowerCase().trim());
   // Reconoce el encabezado en ambos idiomas — el export puede venir de
   // cualquiera de los dos locales y debe poder re-importarse.
   const isHeader =
@@ -117,19 +166,60 @@ function parseCSVContent(csvText, t) {
     firstLine.includes("rate_name");
   const startIdx = isHeader ? 1 : 0;
 
+  // Mapa key→posición. Con encabezado se resuelve por NOMBRE (es/en), así el
+  // orden de las columnas puede cambiar sin romper archivos viejos. Sin
+  // encabezado se cae al orden posicional canónico de CSV_COLUMNS.
+  const colPos = {};
+  CSV_COLUMNS.forEach((c, i) => {
+    colPos[c.key] = i;
+  });
+  const headerPos = {};
+  if (isHeader) {
+    firstLine.forEach((h, pos) => {
+      const col = CSV_COLUMNS.find((c) => c.es === h || c.en === h);
+      if (col) headerPos[col.key] = pos;
+    });
+  }
+
   const rows = [];
   const errors = [];
 
   for (let i = startIdx; i < lines.length; i++) {
     const lineNum = i + 1;
-    const fields = parseCSVLine(lines[i]);
+    const fields = parseCSVLine(lines[i], delimiter);
 
     if (fields.length < 4) {
       errors.push(t("csv.missing_fields", { n: lineNum }));
       continue;
     }
 
-    const [dept, name, serviceCode, priceStr, condition, citiesStr, description, timeFrom, timeTo, daysStr, pricingModeStr, weightTiersStr, cartTotalTiersStr, productConditionStr, productTagsStr, minDeliveryStr, maxDeliveryStr, productFieldStr, productMatchModeStr, countryStr, warehouseStr, cityAliasesStr, perItemPriceStr] = fields;
+    const get = (key) => {
+      const pos = isHeader ? headerPos[key] : colPos[key];
+      return pos != null && fields[pos] != null ? fields[pos] : "";
+    };
+    const dept = get("department");
+    const name = get("rate_name");
+    const serviceCode = get("service_type");
+    const priceStr = get("price");
+    const condition = get("city_condition");
+    const citiesStr = get("cities");
+    const description = get("description");
+    const timeFrom = get("from_time");
+    const timeTo = get("to_time");
+    const daysStr = get("days");
+    const pricingModeStr = get("pricing_mode");
+    const weightTiersStr = get("weight_ranges");
+    const cartTotalTiersStr = get("cart_ranges");
+    const productConditionStr = get("product_condition");
+    const productTagsStr = get("product_tags");
+    const minDeliveryStr = get("delivery_min_days");
+    const maxDeliveryStr = get("delivery_max_days");
+    const productFieldStr = get("product_field");
+    const productMatchModeStr = get("product_match_mode");
+    const countryStr = get("country");
+    const warehouseStr = get("warehouse");
+    const cityAliasesStr = get("city_aliases");
+    const perItemPriceStr = get("per_item_price");
 
     // Accept any non-empty region name. Membership in a fixed list can't be
     // enforced internationally (zones now span multiple countries); the zone
@@ -2205,16 +2295,19 @@ function ZoneSection({ zone, t, planInfo, shopCountry, countryName, searchQuery 
  * producto, multi-país). Los datos son neutros; solo el encabezado se traduce.
  */
 function generateTemplateCSV(locale) {
+  // Filas como objetos por key → se serializan en el orden de CSV_COLUMNS, así
+  // reordenar columnas no descuadra la plantilla. Campos omitidos = vacío.
   const rows = [
-    'Antioquia,Envío estándar,mox_envio,12000,all,,Entrega en todo el departamento,,,,flat,,,all,,2,4,tags,any,CO,,',
-    'Antioquia,Envío express,mox_express,20000,include,"MEDELLÍN,ENVIGADO,SABANETA",Solo área metropolitana,08:00,18:00,"mon,tue,wed,thu,fri",flat,,,all,,1,1,tags,any,CO,Bodega Medellín,"MEDELLÍN>medallo|medall;ENVIGADO>envig"',
-    'Cundinamarca,Envío por peso,mox_envio,0,all,,,,,,weight_tiers,"0-5:10000;5-15:20000",,all,,2,5,tags,any,CO,,',
-    'Cundinamarca,Gratis desde 200.000,mox_envio,0,all,,,,,,cart_total,,"0-200000:15000;200000-0:0",all,,2,5,tags,any,CO,,',
-    'Antioquia,Refrigerado,mox_envio,25000,all,,Cadena de frío,,,,flat,,,include,congelados,1,2,collection,all,CO,,',
-    'Antioquia,Envío por ítem,mox_envio,10000,all,,Primer ítem 10.000 + 2.000 c/u adicional,,,,per_item,,,all,,2,4,tags,any,CO,,,2000',
-    'Jalisco,Envío MX,mox_envio,150,all,,,,,,flat,,,all,,3,6,tags,any,MX,,',
+    { department: "Antioquia", rate_name: "Envío estándar", service_type: "mox_envio", pricing_mode: "flat", price: "12000", city_condition: "all", description: "Entrega en todo el departamento", product_condition: "all", delivery_min_days: "2", delivery_max_days: "4", product_field: "tags", product_match_mode: "any", country: "CO" },
+    { department: "Antioquia", rate_name: "Envío express", service_type: "mox_express", pricing_mode: "flat", price: "20000", city_condition: "include", cities: "MEDELLÍN,ENVIGADO,SABANETA", description: "Solo área metropolitana", from_time: "08:00", to_time: "18:00", days: "mon,tue,wed,thu,fri", product_condition: "all", delivery_min_days: "1", delivery_max_days: "1", product_field: "tags", product_match_mode: "any", country: "CO", warehouse: "Bodega Medellín", city_aliases: "MEDELLÍN>medallo|medall;ENVIGADO>envig" },
+    { department: "Cundinamarca", rate_name: "Envío por peso", service_type: "mox_envio", pricing_mode: "weight_tiers", weight_ranges: "0-5:10000;5-15:20000", city_condition: "all", product_condition: "all", delivery_min_days: "2", delivery_max_days: "5", product_field: "tags", product_match_mode: "any", country: "CO" },
+    { department: "Cundinamarca", rate_name: "Gratis desde 200.000", service_type: "mox_envio", pricing_mode: "cart_total", cart_ranges: "0-200000:15000;200000-0:0", city_condition: "all", product_condition: "all", delivery_min_days: "2", delivery_max_days: "5", product_field: "tags", product_match_mode: "any", country: "CO" },
+    { department: "Antioquia", rate_name: "Refrigerado", service_type: "mox_envio", pricing_mode: "flat", price: "25000", city_condition: "all", description: "Cadena de frío", product_condition: "include", product_tags: "congelados", delivery_min_days: "1", delivery_max_days: "2", product_field: "collection", product_match_mode: "all", country: "CO" },
+    { department: "Antioquia", rate_name: "Envío por ítem", service_type: "mox_envio", pricing_mode: "per_item", price: "10000", per_item_price: "2000", city_condition: "all", description: "Primer ítem 10.000 + 2.000 c/u adicional", product_condition: "all", delivery_min_days: "2", delivery_max_days: "4", product_field: "tags", product_match_mode: "any", country: "CO" },
+    { department: "Jalisco", rate_name: "Envío MX", service_type: "mox_envio", pricing_mode: "flat", price: "150", city_condition: "all", product_condition: "all", delivery_min_days: "3", delivery_max_days: "6", product_field: "tags", product_match_mode: "any", country: "MX" },
   ];
-  return [getCSVHeaders(locale), ...rows].join("\n");
+  const serialize = (r) => CSV_COLUMNS.map((c) => csvField(r[c.key] ?? "")).join(",");
+  return [getCSVHeaders(locale), ...rows.map(serialize)].join("\n");
 }
 
 // Referencia de columnas para la guía del CSV. `desc` es clave i18n; valores y
@@ -2223,15 +2316,16 @@ const CSV_HELP_COLUMNS = [
   { es: "departamento", en: "department", values: "", example: "Antioquia" },
   { es: "nombre_tarifa", en: "rate_name", values: "", example: "Envío estándar" },
   { es: "tipo_servicio", en: "service_type", values: "mox_envio | mox_express | mox_pickup", example: "mox_envio" },
+  { es: "modo_precio", en: "pricing_mode", values: "flat | weight_tiers | cart_total | per_item", example: "flat" },
   { es: "precio", en: "price", values: "", example: "12000" },
+  { es: "rangos_peso", en: "weight_ranges", values: "minKg-maxKg:precio;…", example: '"0-5:10000;5-15:20000"' },
+  { es: "rangos_monto", en: "cart_ranges", values: "min-max:precio;… (max 0 = sin tope)", example: '"0-200000:15000;200000-0:0"' },
+  { es: "precio_item_adicional", en: "per_item_price", values: "", example: "2000" },
   { es: "condicion_ciudad", en: "city_condition", values: "all | include | exclude", example: "include" },
   { es: "ciudades", en: "cities", values: "", example: '"MEDELLÍN,ENVIGADO"' },
   { es: "descripcion", en: "description", values: "", example: "Entrega 24h" },
   { es: "hora_desde / hora_hasta", en: "from_time / to_time", values: "HH:MM", example: "08:00 / 18:00" },
   { es: "dias", en: "days", values: "mon…sun", example: '"mon,tue,wed,thu,fri"' },
-  { es: "modo_precio", en: "pricing_mode", values: "flat | weight_tiers | cart_total", example: "flat" },
-  { es: "rangos_peso", en: "weight_ranges", values: "minKg-maxKg:precio;…", example: '"0-5:10000;5-15:20000"' },
-  { es: "rangos_monto", en: "cart_ranges", values: "min-max:precio;… (max 0 = sin tope)", example: '"0-200000:15000;200000-0:0"' },
   { es: "condicion_producto", en: "product_condition", values: "all | include | exclude", example: "include" },
   { es: "tags_producto", en: "product_tags", values: "", example: "congelados" },
   { es: "entrega_min_dias / entrega_max_dias", en: "delivery_min/max_days", values: "", example: "2 / 4" },
@@ -2240,7 +2334,6 @@ const CSV_HELP_COLUMNS = [
   { es: "pais", en: "country", values: "ISO-2", example: "CO, MX, BR…" },
   { es: "bodega", en: "warehouse", values: "", example: "Bodega Medellín" },
   { es: "alias_ciudades", en: "city_aliases", values: "CANÓNICA>alias1|alias2;…", example: '"MEDELLÍN>medallo|medell"' },
-  { es: "precio_item_adicional", en: "per_item_price", values: "", example: "2000" },
 ];
 
 function CsvHelp({ t, locale }) {
@@ -2255,6 +2348,8 @@ function CsvHelp({ t, locale }) {
           <li>{t("shipping.csv_help_tip_quotes")}</li>
           <li>{t("shipping.csv_help_tip_empty")}</li>
           <li>{t("shipping.csv_help_tip_values_field")}</li>
+          <li>{t("shipping.csv_help_tip_price")}</li>
+          <li>{t("shipping.csv_help_tip_ranges")}</li>
         </ul>
         <div style={{ overflowX: "auto" }}>
           <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12 }}>
@@ -2315,32 +2410,35 @@ function generateCSV(zones, locale, warehouses = []) {
       const aliasStr = Object.entries(aliasMap)
         .map(([k, v]) => `${k}>${(Array.isArray(v) ? v : []).join("|")}`)
         .join(";");
-      const fields = [
-        csvField(zone.department),
-        csvField(rate.name),
-        rate.serviceCode,
-        rate.price,
-        rate.cityCondition,
-        cities.length ? `"${cities.join(",")}"` : "",
-        csvField(rate.description || ""),
-        rate.timeFrom || "",
-        rate.timeTo || "",
-        days.length ? `"${days.join(",")}"` : "",
-        rate.pricingMode || "flat",
-        wTiersStr,
-        cTiersStr,
-        rate.productCondition || "all",
-        pTags.length ? `"${pTags.join(",")}"` : "",
-        rate.minDeliveryDays ?? "",
-        rate.maxDeliveryDays ?? "",
-        rate.productField || "tags",
-        rate.productMatchMode || "any",
-        zone.country || "CO",
-        csvField(rate.warehouseId ? (whById.get(rate.warehouseId) || "") : ""),
-        aliasStr ? `"${aliasStr}"` : "",
-        rate.pricingMode === "per_item" ? (rate.perItemPrice || 0) : "",
-      ];
-      lines.push(fields.join(","));
+      const valueByKey = {
+        department: csvField(zone.department),
+        rate_name: csvField(rate.name),
+        service_type: rate.serviceCode,
+        pricing_mode: rate.pricingMode || "flat",
+        // Precio base solo aplica a flat/per_item. En weight_tiers/cart_total el
+        // valor vive en rangos_peso/rangos_monto → dejar vacío (no "0", que se
+        // lee como gratis). Vacío re-importa como precio base 0 (ignorado en tiers).
+        price: (rate.pricingMode === "weight_tiers" || rate.pricingMode === "cart_total") ? "" : rate.price,
+        weight_ranges: wTiersStr,
+        cart_ranges: cTiersStr,
+        per_item_price: rate.pricingMode === "per_item" ? (rate.perItemPrice || 0) : "",
+        city_condition: rate.cityCondition,
+        cities: cities.length ? `"${cities.join(",")}"` : "",
+        description: csvField(rate.description || ""),
+        from_time: rate.timeFrom || "",
+        to_time: rate.timeTo || "",
+        days: days.length ? `"${days.join(",")}"` : "",
+        product_condition: rate.productCondition || "all",
+        product_tags: pTags.length ? `"${pTags.join(",")}"` : "",
+        delivery_min_days: rate.minDeliveryDays ?? "",
+        delivery_max_days: rate.maxDeliveryDays ?? "",
+        product_field: rate.productField || "tags",
+        product_match_mode: rate.productMatchMode || "any",
+        country: zone.country || "CO",
+        warehouse: csvField(rate.warehouseId ? (whById.get(rate.warehouseId) || "") : ""),
+        city_aliases: aliasStr ? `"${aliasStr}"` : "",
+      };
+      lines.push(CSV_COLUMNS.map((c) => valueByKey[c.key]).join(","));
     }
   }
 
