@@ -105,6 +105,67 @@ function isWithinSchedule(rate, tz) {
 // --- Product conditions ---
 
 const lowerTrim = (s) => String(s || "").toLowerCase().trim();
+const VALID_PRODUCT_FIELDS = new Set(["tags", "vendor", "product_type", "collection", "sku"]);
+
+/**
+ * Normaliza el JSON de condiciones múltiples. Si no existe, convierte los
+ * campos legacy en una condición para que las reglas antiguas sigan iguales.
+ *
+ * Cada condición (excepto la primera) puede traer `join: "and"|"or"` para
+ * encadenarse con el resultado anterior. Si falta, se usa productConditionLogic.
+ */
+export function normalizeProductConditions(rate) {
+  let parsed = [];
+  try {
+    parsed = typeof rate.productConditions === "string"
+      ? JSON.parse(rate.productConditions || "[]")
+      : rate.productConditions;
+  } catch {
+    parsed = [];
+  }
+
+  const fallbackJoin = rate.productConditionLogic === "or" ? "or" : "and";
+  const conditions = (Array.isArray(parsed) ? parsed : [])
+    .map((condition) => ({
+      field: VALID_PRODUCT_FIELDS.has(condition?.field) ? condition.field : "tags",
+      matchMode: condition?.matchMode === "all" ? "all" : "any",
+      values: (Array.isArray(condition?.values) ? condition.values : [])
+        .map(lowerTrim)
+        .filter(Boolean),
+      join: condition?.join === "or" || condition?.join === "and"
+        ? condition.join
+        : null,
+    }))
+    .filter((condition) => condition.values.length > 0)
+    .map((condition, index) => ({
+      field: condition.field,
+      matchMode: condition.matchMode,
+      values: condition.values,
+      // La primera no se une a nada; las siguientes usan su join o el global legacy.
+      join: index === 0 ? "and" : (condition.join || fallbackJoin),
+    }));
+
+  if (conditions.length > 0) return conditions;
+  if (!rate.productCondition || rate.productCondition === "all") return [];
+
+  let legacyValues = [];
+  try {
+    legacyValues = JSON.parse(rate.productTags || "[]");
+  } catch {
+    legacyValues = [];
+  }
+  const values = (Array.isArray(legacyValues) ? legacyValues : [])
+    .map(lowerTrim)
+    .filter(Boolean);
+  if (!values.length) return [];
+
+  return [{
+    field: VALID_PRODUCT_FIELDS.has(rate.productField) ? rate.productField : "tags",
+    matchMode: rate.productMatchMode === "all" ? "all" : "any",
+    values,
+    join: "and",
+  }];
+}
 
 /**
  * ¿Este item del carrito matchea los valores configurados para el campo?
@@ -130,7 +191,7 @@ function itemMatchesProductValues(item, field, values) {
 /**
  * Evalúa la condición de producto de una rate contra el carrito.
  *
- * @param {object} rate — ShippingRate (productCondition/productField/productMatchMode/productTags)
+ * @param {object} rate — ShippingRate con condición simple legacy o condiciones múltiples.
  * @param {Array|null} cartProducts — un objeto por item del carrito (ver itemMatchesProductValues)
  * @param {string[]|null} flatItemTags — fallback legacy: tags del carrito aplanadas (callers viejos)
  * @returns {{ applies: boolean, matched?: boolean }} applies=false → la rate se descarta.
@@ -142,24 +203,41 @@ function itemMatchesProductValues(item, field, values) {
 export function evaluateProductCondition(rate, cartProducts, flatItemTags) {
   if (!rate.productCondition || rate.productCondition === "all") return { applies: true };
 
-  const values = JSON.parse(rate.productTags || "[]").map(lowerTrim).filter(Boolean);
-  if (!values.length) return { applies: true };
-
+  const conditions = normalizeProductConditions(rate);
+  if (!conditions.length) return { applies: true };
   const isInclude = rate.productCondition === "include" || rate.productCondition === "include_tags";
-  const field = rate.productField || "tags";
-  const mode = rate.productMatchMode || "any";
+  const results = [];
 
-  let matched;
-  if (Array.isArray(cartProducts) && cartProducts.length) {
-    const flags = cartProducts.map((p) => itemMatchesProductValues(p, field, values));
-    matched = mode === "all" ? flags.every(Boolean) : flags.some(Boolean);
-  } else if (flatItemTags && field === "tags") {
-    // Camino legacy: lista plana de tags sin mapeo por item — solo modo "any".
-    matched = values.some((v) => flatItemTags.includes(v));
-  } else {
-    return { applies: true };
+  for (const condition of conditions) {
+    let matched;
+    if (Array.isArray(cartProducts) && cartProducts.length) {
+      const flags = cartProducts.map((product) =>
+        itemMatchesProductValues(product, condition.field, condition.values));
+      matched = condition.matchMode === "all" ? flags.every(Boolean) : flags.some(Boolean);
+    } else if (flatItemTags && condition.field === "tags") {
+      // Camino legacy: lista plana de tags sin mapeo por item — solo modo "any".
+      matched = condition.values.some((value) => flatItemTags.includes(value));
+    } else {
+      // Sin datos suficientes para evaluar alguna condición → fail-open completo.
+      // Evita que AND/OR se resuelva solo con el subconjunto evaluable (ej. tags
+      // legacy mientras vendor/colección nunca se verificaron).
+      return { applies: true };
+    }
+    results.push(matched);
   }
 
+  // Encadenamiento izquierda→derecha: ((c1 join2 c2) join3 c3)…
+  // Si ninguna condición trae join propio, productConditionLogic cubre el caso
+  // legacy de un único operador global.
+  let matched = results[0];
+  for (let i = 1; i < results.length; i++) {
+    const join = conditions[i].join === "or"
+      ? "or"
+      : (conditions[i].join === "and"
+        ? "and"
+        : (rate.productConditionLogic === "or" ? "or" : "and"));
+    matched = join === "or" ? (matched || results[i]) : (matched && results[i]);
+  }
   return { applies: isInclude ? matched : !matched, matched };
 }
 
@@ -311,15 +389,17 @@ export async function getRatesForDestination(shop, departmentSlug, city, departm
       const res = evaluateProductCondition(rate, opts.cartProducts || null, normalizedItemTags);
       if (!res.applies) {
         const isInclude = rate.productCondition === "include" || rate.productCondition === "include_tags";
-        const field = rate.productField || "tags";
-        const mode = rate.productMatchMode || "any";
-        const values = JSON.parse(rate.productTags || "[]");
-        info(`[rates-filter] ${zone.slug}/${rate.name}(${rate.serviceCode}) DROP product ${isInclude ? "include" : "exclude"} field=${field} mode=${mode}`);
+        const conditions = normalizeProductConditions(rate);
+        const logic = rate.productConditionLogic === "or" ? "or" : "and";
+        const detail = conditions
+          .map(({ field, matchMode, values }) => `${field}/${matchMode}: [${values.join(", ")}]`)
+          .join(` ${logic.toUpperCase()} `);
+        info(`[rates-filter] ${zone.slug}/${rate.name}(${rate.serviceCode}) DROP product ${isInclude ? "include" : "exclude"} ${detail}`);
         traceRule(
           rate,
           false,
           isInclude ? "product_include" : "product_exclude",
-          `${field}/${mode}: [${values.join(", ")}]`,
+          detail,
         );
         return false;
       }
@@ -548,6 +628,8 @@ export async function saveRate({
   productField,
   productMatchMode,
   productTags,
+  productConditions,
+  productConditionLogic,
   minDeliveryDays,
   maxDeliveryDays,
   warehouseId,
@@ -564,9 +646,21 @@ export async function saveRate({
     normalizedProductCondition = "exclude";
     normalizedProductField = "tags";
   }
-  const VALID_FIELDS = new Set(["tags", "vendor", "product_type", "collection", "sku"]);
-  if (!VALID_FIELDS.has(normalizedProductField)) normalizedProductField = "tags";
+  if (!VALID_PRODUCT_FIELDS.has(normalizedProductField)) normalizedProductField = "tags";
   const normalizedMatchMode = productMatchMode === "all" ? "all" : "any";
+  const normalizedConditions = normalizeProductConditions({
+    productCondition: normalizedProductCondition,
+    productField: normalizedProductField,
+    productMatchMode: normalizedMatchMode,
+    productTags,
+    productConditions,
+  });
+  // Mantener el primer criterio en las columnas legacy para exportaciones y
+  // consumidores antiguos del metafield.
+  const firstCondition = normalizedConditions[0];
+  if (firstCondition) {
+    normalizedProductField = firstCondition.field;
+  }
   // parseFloat (not parseInt): prices are in major currency units and may have
   // minor units for non-zero-decimal currencies (USD 12.99). Clamp a >= 0 —
   // un precio negativo llegaría tal cual al checkout de Shopify (comportamiento
@@ -618,9 +712,30 @@ export async function saveRate({
     weightTiers: clampTierPrices(weightTiers),
     cartTotalTiers: clampTierPrices(cartTotalTiers),
     productCondition: normalizedProductCondition,
-    productField: normalizedProductField,
-    productMatchMode: normalizedMatchMode,
-    productTags: productTags || "[]",
+    // Al volver a "all" se limpian los campos residuales para que CSV/export
+    // no arrastren criterios viejos junto a product_condition=all.
+    productField: normalizedProductCondition === "all"
+      ? "tags"
+      : (firstCondition?.field || normalizedProductField),
+    productMatchMode: normalizedProductCondition === "all"
+      ? "any"
+      : (firstCondition?.matchMode || normalizedMatchMode),
+    productTags: JSON.stringify(
+      normalizedProductCondition === "all" ? [] : (firstCondition?.values || []),
+    ),
+    productConditions: normalizedProductCondition === "all"
+      ? "[]"
+      : JSON.stringify(normalizedConditions),
+    // Columna legacy: si todos los joins (después del primero) son iguales,
+    // se espeja; si son mixtos, queda "and" y manda el join por condición.
+    productConditionLogic: normalizedProductCondition === "all"
+      ? "and"
+      : (() => {
+        const joins = normalizedConditions.slice(1).map((c) => c.join);
+        if (joins.length && joins.every((j) => j === "or")) return "or";
+        if (productConditionLogic === "or" && joins.length === 0) return "or";
+        return "and";
+      })(),
     minDeliveryDays: minDays,
     maxDeliveryDays: maxDays,
     // "" o ausente → null = bodega derivada por ubicación (no override).
@@ -778,10 +893,20 @@ export async function syncRulesToMetafield(admin, shop) {
       };
 
       if (rate.productCondition !== "all") {
+        const productConditions = normalizeProductConditions(rate);
         rule.productCondition = rate.productCondition;
-        rule.productField = rate.productField || "tags";
-        rule.productMatchMode = rate.productMatchMode || "any";
-        rule.productTags = JSON.parse(rate.productTags || "[]");
+        rule.productConditions = productConditions;
+        rule.productConditionLogic = productConditions.length > 1
+          && productConditions.slice(1).every((c) => c.join === "or")
+          ? "or"
+          : "and";
+        // Campos legacy solo cuando hay una condición: con varias, publicar solo
+        // el modelo nuevo evita que temas viejos apliquen un filtro incompleto.
+        if (productConditions.length === 1) {
+          rule.productField = productConditions[0].field;
+          rule.productMatchMode = productConditions[0].matchMode;
+          rule.productTags = productConditions[0].values;
+        }
       }
 
       if (rate.timeFrom) rule.timeFrom = rate.timeFrom;

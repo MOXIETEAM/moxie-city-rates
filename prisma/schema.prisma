@@ -143,10 +143,18 @@ model ShippingRate {
   //    items del carrito deben matchear (ej. carrito 100% congelados).
   //  - productTags: JSON array de valores (nombre histórico — hoy guarda tags,
   //    vendors, tipos, handles/títulos de colección o SKUs según productField).
+  //  - productConditions: JSON array del modelo multi-condición. Cada entrada
+  //    guarda { field, matchMode, values, join }. Vacío = usar los campos legacy.
+  //    `join` ("and"|"or") indica cómo se encadena con el resultado anterior
+  //    (la primera condición lo ignora). Evaluación izquierda→derecha.
+  //  - productConditionLogic: fallback legacy cuando las entradas no traen
+  //    `join`; si todos los joins son "or" se espeja "or", si no "and".
   productCondition String     @default("all")
   productField     String     @default("tags")
   productMatchMode String     @default("any")
   productTags      String     @default("[]")    // JSON array: '["fragil","pesado"]'
+  productConditions String    @default("[]")
+  productConditionLogic String @default("and")
   // Estimado de entrega en días calendario. Si ambos son null no se envía
   // estimado. En checkout se convierten a min/max_delivery_date (hoy + N días)
   // y Shopify los muestra bajo la tarifa ("Llega entre el X y el Y").

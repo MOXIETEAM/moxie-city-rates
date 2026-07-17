@@ -98,6 +98,8 @@ const CSV_COLUMNS = [
   { key: "country", es: "pais", en: "country" },
   { key: "warehouse", es: "bodega", en: "warehouse" },
   { key: "city_aliases", es: "alias_ciudades", en: "city_aliases" },
+  { key: "product_conditions", es: "condiciones_producto", en: "product_conditions" },
+  { key: "product_condition_logic", es: "logica_condiciones_producto", en: "product_condition_logic" },
 ];
 
 function getCSVHeaders(locale) {
@@ -220,6 +222,8 @@ function parseCSVContent(csvText, t) {
     const warehouseStr = get("warehouse");
     const cityAliasesStr = get("city_aliases");
     const perItemPriceStr = get("per_item_price");
+    const productConditionsStr = get("product_conditions");
+    const productConditionLogicStr = get("product_condition_logic");
 
     // Accept any non-empty region name. Membership in a fixed list can't be
     // enforced internationally (zones now span multiple countries); the zone
@@ -294,6 +298,22 @@ function parseCSVContent(csvText, t) {
     const VALID_PRODUCT_FIELDS = new Set(["tags", "vendor", "product_type", "collection", "sku"]);
     const productField = productFieldStr && VALID_PRODUCT_FIELDS.has(productFieldStr) ? productFieldStr : "tags";
     const productMatchMode = productMatchModeStr === "all" ? "all" : "any";
+    let productConditions = [];
+    if (productConditionsStr) {
+      try {
+        const parsedConditions = JSON.parse(productConditionsStr);
+        if (Array.isArray(parsedConditions)) {
+          productConditions = parsedConditions;
+        } else {
+          errors.push(t("csv.invalid_product_conditions", { n: lineNum }));
+          continue;
+        }
+      } catch {
+        errors.push(t("csv.invalid_product_conditions", { n: lineNum }));
+        continue;
+      }
+    }
+    const productConditionLogic = productConditionLogicStr === "or" ? "or" : "and";
 
     // Alias de ciudad (opcional): "CANONICAL>alias1|alias2;CANONICAL2>alias3".
     // Mapa canónico→variantes para homologación fuzzy en checkout.
@@ -332,6 +352,8 @@ function parseCSVContent(csvText, t) {
       productField,
       productMatchMode,
       productTags,
+      productConditions,
+      productConditionLogic,
       minDeliveryDays: minDeliveryStr || null,
       maxDeliveryDays: maxDeliveryStr || null,
       // ISO-2 opcional; vacío = país de la tienda (se resuelve en el import).
@@ -710,6 +732,8 @@ export const action = async ({ request }) => {
         productField: formData.get("productField") || "tags",
         productMatchMode: formData.get("productMatchMode") || "any",
         productTags: formData.get("productTags") || "[]",
+        productConditions: formData.get("productConditions") || "[]",
+        productConditionLogic: formData.get("productConditionLogic") || "and",
         minDeliveryDays: formData.get("minDeliveryDays"),
         maxDeliveryDays: formData.get("maxDeliveryDays"),
         warehouseId: formData.get("warehouseId") || null,
@@ -879,6 +903,8 @@ export const action = async ({ request }) => {
           productField: row.productField,
           productMatchMode: row.productMatchMode,
           productTags: JSON.stringify(row.productTags),
+          productConditions: JSON.stringify(row.productConditions || []),
+          productConditionLogic: row.productConditionLogic || "and",
           minDeliveryDays: row.minDeliveryDays,
           maxDeliveryDays: row.maxDeliveryDays,
         });
@@ -1305,6 +1331,38 @@ function ProFeatureNotice({ t }) {
   );
 }
 
+function getInitialProductConditions(rate) {
+  const fallbackJoin = rate?.productConditionLogic === "or" ? "or" : "and";
+  try {
+    const parsed = JSON.parse(rate?.productConditions || "[]");
+    if (Array.isArray(parsed) && parsed.length > 0) {
+      return parsed.map((condition, index) => ({
+        field: condition.field || "tags",
+        matchMode: condition.matchMode === "all" ? "all" : "any",
+        values: Array.isArray(condition.values) ? condition.values : [],
+        join: index === 0
+          ? "and"
+          : (condition.join === "or" || condition.join === "and" ? condition.join : fallbackJoin),
+      }));
+    }
+  } catch {
+    // JSON viejo o inválido: usar los campos legacy de abajo.
+  }
+
+  let values = [];
+  try {
+    values = rate?.productTags ? JSON.parse(rate.productTags) : [];
+  } catch {
+    values = [];
+  }
+  return [{
+    field: rate?.productField || "tags",
+    matchMode: rate?.productMatchMode === "all" ? "all" : "any",
+    values: Array.isArray(values) ? values : [],
+    join: "and",
+  }];
+}
+
 function RateForm({ rate, zoneId, zoneSlug, createCountry, createDepartments, department, onCancel, t, planLimits, enabledServices }) {
   // Alta desde el modal: se reciben nombres de departamento (+ país); la zona
   // se crea al vuelo en el server. Edición: zoneId fijo.
@@ -1337,11 +1395,11 @@ function RateForm({ rate, zoneId, zoneSlug, createCountry, createDepartments, de
     : rate?.productCondition === "exclude_tags" ? "exclude"
     : rate?.productCondition || "all";
   const [productCondition, setProductCondition] = useState(initialCondition);
-  const [productField, setProductField] = useState(rate?.productField || "tags");
-  const [productMatchMode, setProductMatchMode] = useState(rate?.productMatchMode || "any");
-  const [productTags, setProductTags] = useState(
-    rate?.productTags ? JSON.parse(rate.productTags) : []
-  );
+  const [productConditions, setProductConditions] = useState(() => getInitialProductConditions(rate));
+  const productConditionLogic = productConditions.length > 1
+    && productConditions.slice(1).every((condition) => condition.join === "or")
+    ? "or"
+    : "and";
   const [weightTiers, setWeightTiers] = useState(
     rate?.weightTiers ? JSON.parse(rate.weightTiers) : []
   );
@@ -1424,9 +1482,11 @@ function RateForm({ rate, zoneId, zoneSlug, createCountry, createDepartments, de
       <input type="hidden" name="weightTiers" value={JSON.stringify(weightTiers)} />
       <input type="hidden" name="cartTotalTiers" value={JSON.stringify(cartTotalTiers)} />
       <input type="hidden" name="productCondition" value={productCondition} />
-      <input type="hidden" name="productField" value={productField} />
-      <input type="hidden" name="productMatchMode" value={productMatchMode} />
-      <input type="hidden" name="productTags" value={JSON.stringify(productTags)} />
+      <input type="hidden" name="productConditionLogic" value={productConditionLogic} />
+      <input type="hidden" name="productConditions" value={JSON.stringify(productConditions)} />
+      <input type="hidden" name="productField" value={productConditions[0]?.field || "tags"} />
+      <input type="hidden" name="productMatchMode" value={productConditions[0]?.matchMode || "any"} />
+      <input type="hidden" name="productTags" value={JSON.stringify(productConditions[0]?.values || [])} />
 
       <s-stack direction="block" gap="base">
         {planBlocksSave && (
@@ -1746,50 +1806,116 @@ function RateForm({ rate, zoneId, zoneSlug, createCountry, createDepartments, de
         </div>
 
         {productCondition !== "all" && (
-          <div>
-            <s-stack direction="inline" gap="base" style={{ flexWrap: "wrap", alignItems: "flex-end" }}>
-              <div>
-                <label style={{ display: "block", fontSize: "13px", fontWeight: 600, marginBottom: "4px" }}>
-                  {t("shipping.product_field")}
-                </label>
-                <select
-                  value={productField}
-                  onChange={(e) => setProductField(e.target.value)}
-                  style={{ padding: "8px 12px", borderRadius: "8px", border: "1px solid #ccc", minWidth: "160px" }}
-                >
-                  <option value="tags">{t("shipping.field_tags")}</option>
-                  <option value="vendor">{t("shipping.field_vendor")}</option>
-                  <option value="product_type">{t("shipping.field_product_type")}</option>
-                  <option value="collection">{t("shipping.field_collection")}</option>
-                  <option value="sku">{t("shipping.field_sku")}</option>
-                </select>
-              </div>
-              <div>
-                <label style={{ display: "block", fontSize: "13px", fontWeight: 600, marginBottom: "4px" }}>
-                  {t("shipping.product_match_mode")}
-                </label>
-                <select
-                  value={productMatchMode}
-                  onChange={(e) => setProductMatchMode(e.target.value)}
-                  style={{ padding: "8px 12px", borderRadius: "8px", border: "1px solid #ccc", minWidth: "200px" }}
-                >
-                  <option value="any">{t("shipping.match_any")}</option>
-                  <option value="all">{t("shipping.match_all")}</option>
-                </select>
-              </div>
-            </s-stack>
-            <div style={{ marginTop: "8px" }}>
-              <label style={{ display: "block", fontSize: "13px", fontWeight: 600, marginBottom: "4px" }}>
-                {t("shipping.product_values_label")}
-              </label>
-              <ProductTagInput
-                tags={productTags}
-                onChange={setProductTags}
-                placeholder={t(`shipping.product_values_placeholder_${productField}`)}
-              />
-              {productField === "collection" && (
-                <s-text variant="bodySm" tone="subdued">{t("shipping.collection_hint")}</s-text>
-              )}
+          <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+            {productConditions.map((condition, index) => {
+              const updateCondition = (changes) => {
+                setProductConditions((current) =>
+                  current.map((item, itemIndex) =>
+                    itemIndex === index ? { ...item, ...changes } : item));
+              };
+              return (
+                <div key={index}>
+                  {index > 0 && (
+                    <div style={{
+                      display: "flex",
+                      alignItems: "center",
+                      justifyContent: "center",
+                      gap: 8,
+                      margin: "2px 0 10px",
+                    }}>
+                      <label style={{ fontSize: 12, fontWeight: 600, color: "#3C3489" }}>
+                        {t("shipping.product_join_label")}
+                      </label>
+                      <select
+                        value={condition.join === "or" ? "or" : "and"}
+                        onChange={(event) => updateCondition({ join: event.target.value })}
+                        style={{
+                          padding: "4px 10px",
+                          borderRadius: 999,
+                          border: "1px solid #AFA9EC",
+                          background: "#EEEDFE",
+                          color: "#3C3489",
+                          fontWeight: 700,
+                          fontSize: 12,
+                        }}
+                      >
+                        <option value="and">{t("shipping.product_logic_and_short")}</option>
+                        <option value="or">{t("shipping.product_logic_or_short")}</option>
+                      </select>
+                    </div>
+                  )}
+                  <div style={{ border: "1px solid #e3e3e3", borderRadius: 10, padding: 12, background: "#fafafa" }}>
+                    <s-stack direction="inline" gap="base" style={{ flexWrap: "wrap", alignItems: "flex-end" }}>
+                      <div>
+                        <label style={{ display: "block", fontSize: "13px", fontWeight: 600, marginBottom: 4 }}>
+                          {t("shipping.product_field")}
+                        </label>
+                        <select
+                          value={condition.field}
+                          onChange={(event) => updateCondition({ field: event.target.value })}
+                          style={{ padding: "8px 12px", borderRadius: 8, border: "1px solid #ccc", minWidth: 160 }}
+                        >
+                          <option value="tags">{t("shipping.field_tags")}</option>
+                          <option value="vendor">{t("shipping.field_vendor")}</option>
+                          <option value="product_type">{t("shipping.field_product_type")}</option>
+                          <option value="collection">{t("shipping.field_collection")}</option>
+                          <option value="sku">{t("shipping.field_sku")}</option>
+                        </select>
+                      </div>
+                      <div>
+                        <label style={{ display: "block", fontSize: "13px", fontWeight: 600, marginBottom: 4 }}>
+                          {t("shipping.product_match_mode")}
+                        </label>
+                        <select
+                          value={condition.matchMode}
+                          onChange={(event) => updateCondition({ matchMode: event.target.value })}
+                          style={{ padding: "8px 12px", borderRadius: 8, border: "1px solid #ccc", minWidth: 220 }}
+                        >
+                          <option value="any">{t("shipping.match_any")}</option>
+                          <option value="all">{t("shipping.match_all")}</option>
+                        </select>
+                      </div>
+                      {productConditions.length > 1 && (
+                        <s-button
+                          type="button"
+                          variant="tertiary"
+                          tone="critical"
+                          onClick={() => setProductConditions((current) =>
+                            current.filter((_, itemIndex) => itemIndex !== index))}
+                        >
+                          {t("shipping.remove_product_condition")}
+                        </s-button>
+                      )}
+                    </s-stack>
+                    <div style={{ marginTop: 8 }}>
+                      <label style={{ display: "block", fontSize: "13px", fontWeight: 600, marginBottom: 4 }}>
+                        {t("shipping.product_values_label")}
+                      </label>
+                      <ProductTagInput
+                        tags={condition.values}
+                        onChange={(values) => updateCondition({ values })}
+                        placeholder={t(`shipping.product_values_placeholder_${condition.field}`)}
+                      />
+                      {condition.field === "collection" && (
+                        <s-text variant="bodySm" tone="subdued">{t("shipping.collection_hint")}</s-text>
+                      )}
+                    </div>
+                  </div>
+                </div>
+              );
+            })}
+
+            <div>
+              <s-button
+                type="button"
+                variant="secondary"
+                onClick={() => setProductConditions((current) => [
+                  ...current,
+                  { field: "tags", matchMode: "any", values: [], join: "and" },
+                ])}
+              >
+                {t("shipping.add_product_condition")}
+              </s-button>
             </div>
           </div>
         )}
@@ -1915,12 +2041,39 @@ function RateCard({ rate, zoneId, zoneSlug, department, t, planInfo, enabledServ
     rate.cityCondition === "include" ? t("shipping.only_label").replace("{{cities}}", cities.join(", ")) :
     t("shipping.except_label").replace("{{cities}}", cities.join(", "));
 
-  const pTags = JSON.parse(rate.productTags || "[]");
   const isProductInclude = rate.productCondition === "include" || rate.productCondition === "include_tags";
-  const productFieldLabel = t(`shipping.field_${rate.productField || "tags"}`);
-  const productModeLabel = rate.productMatchMode === "all" ? t("shipping.match_all_short") : "";
-  const productLabel = rate.productCondition === "all" ? null
-    : `${isProductInclude ? t("shipping.product_include_label") : t("shipping.product_exclude_label")} ${productFieldLabel}: ${pTags.join(", ")}${productModeLabel ? ` (${productModeLabel})` : ""}`;
+  let productConditionsSummary = [];
+  try {
+    productConditionsSummary = JSON.parse(rate.productConditions || "[]");
+  } catch {
+    productConditionsSummary = [];
+  }
+  if (!Array.isArray(productConditionsSummary) || productConditionsSummary.length === 0) {
+    const pTags = (() => {
+      try { return JSON.parse(rate.productTags || "[]"); } catch { return []; }
+    })();
+    if (pTags.length) {
+      productConditionsSummary = [{
+        field: rate.productField || "tags",
+        matchMode: rate.productMatchMode || "any",
+        values: pTags,
+      }];
+    }
+  }
+  const productParts = productConditionsSummary.map((condition, index) => {
+    const fieldLabel = t(`shipping.field_${condition.field || "tags"}`);
+    const modeLabel = condition.matchMode === "all" ? ` (${t("shipping.match_all_short")})` : "";
+    const values = Array.isArray(condition.values) ? condition.values.join(", ") : "";
+    const part = `${fieldLabel}: ${values}${modeLabel}`;
+    if (index === 0) return part;
+    const joinLabel = (condition.join === "or"
+      || (!condition.join && rate.productConditionLogic === "or"))
+      ? t("shipping.product_logic_or_short")
+      : t("shipping.product_logic_and_short");
+    return `${joinLabel} ${part}`;
+  });
+  const productLabel = rate.productCondition === "all" || productParts.length === 0 ? null
+    : `${isProductInclude ? t("shipping.product_include_label") : t("shipping.product_exclude_label")} ${productParts.join(" ")}`;
 
   const days = JSON.parse(rate.daysOfWeek || "[]");
   const dayLabels = days.map((d) => getDaysOfWeek(t).find((dw) => dw.value === d)?.label || d);
@@ -2334,6 +2487,8 @@ const CSV_HELP_COLUMNS = [
   { es: "pais", en: "country", values: "ISO-2", example: "CO, MX, BR…" },
   { es: "bodega", en: "warehouse", values: "", example: "Bodega Medellín" },
   { es: "alias_ciudades", en: "city_aliases", values: "CANÓNICA>alias1|alias2;…", example: '"MEDELLÍN>medallo|medell"' },
+  { es: "condiciones_producto", en: "product_conditions", values: "JSON", example: '[{\"field\":\"tags\",\"matchMode\":\"any\",\"values\":[\"fragil\"]}]' },
+  { es: "logica_condiciones_producto", en: "product_condition_logic", values: "and | or", example: "and" },
 ];
 
 function CsvHelp({ t, locale }) {
@@ -2404,6 +2559,12 @@ function generateCSV(zones, locale, warehouses = []) {
         ? `"${cTiers.map((t) => `${t.minAmount}-${t.maxAmount}:${t.price}`).join(";")}"`
         : "";
       const pTags = JSON.parse(rate.productTags || "[]");
+      let productConditions = [];
+      try {
+        productConditions = JSON.parse(rate.productConditions || "[]");
+      } catch {
+        productConditions = [];
+      }
       // Alias de ciudad → "CANONICAL>a|b;CANONICAL2>c" (round-trip con el parse).
       let aliasMap = {};
       try { aliasMap = JSON.parse(rate.cityAliases || "{}") || {}; } catch { aliasMap = {}; }
@@ -2437,6 +2598,8 @@ function generateCSV(zones, locale, warehouses = []) {
         country: zone.country || "CO",
         warehouse: csvField(rate.warehouseId ? (whById.get(rate.warehouseId) || "") : ""),
         city_aliases: aliasStr ? `"${aliasStr}"` : "",
+        product_conditions: productConditions.length ? csvField(JSON.stringify(productConditions)) : "",
+        product_condition_logic: rate.productConditionLogic === "or" ? "or" : "and",
       };
       lines.push(CSV_COLUMNS.map((c) => valueByKey[c.key]).join(","));
     }

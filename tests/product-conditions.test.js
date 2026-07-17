@@ -90,6 +90,133 @@ describe("evaluateProductCondition", () => {
     ).toBe(true);
   });
 
+  it("combina varias condiciones con Y", () => {
+    const r = rate({
+      productConditions: JSON.stringify([
+        { field: "tags", matchMode: "any", values: ["fragil"] },
+        { field: "vendor", matchMode: "any", values: ["nike"], join: "and" },
+      ]),
+    });
+    expect(evaluateProductCondition(r, [
+      item({ tags: ["fragil"], vendor: "Nike" }),
+    ]).applies).toBe(true);
+    expect(evaluateProductCondition(r, [
+      item({ tags: ["fragil"], vendor: "Adidas" }),
+    ]).applies).toBe(false);
+  });
+
+  it("combina varias condiciones con O", () => {
+    const r = rate({
+      productConditions: JSON.stringify([
+        { field: "tags", matchMode: "any", values: ["fragil"] },
+        { field: "vendor", matchMode: "any", values: ["nike"], join: "or" },
+      ]),
+    });
+    expect(evaluateProductCondition(r, [
+      item({ tags: ["otro"], vendor: "Nike" }),
+    ]).applies).toBe(true);
+    expect(evaluateProductCondition(r, [
+      item({ tags: ["otro"], vendor: "Adidas" }),
+    ]).applies).toBe(false);
+  });
+
+  it("mezcla Y y O de izquierda a derecha", () => {
+    // (tags:fragil Y vendor:nike) O sku:sku-001
+    const r = rate({
+      productConditions: JSON.stringify([
+        { field: "tags", matchMode: "any", values: ["fragil"] },
+        { field: "vendor", matchMode: "any", values: ["nike"], join: "and" },
+        { field: "sku", matchMode: "any", values: ["sku-001"], join: "or" },
+      ]),
+    });
+    expect(evaluateProductCondition(r, [
+      item({ tags: ["fragil"], vendor: "Nike", sku: "otro" }),
+    ]).applies).toBe(true);
+    expect(evaluateProductCondition(r, [
+      item({ tags: ["otro"], vendor: "Adidas", sku: "SKU-001" }),
+    ]).applies).toBe(true);
+    expect(evaluateProductCondition(r, [
+      item({ tags: ["fragil"], vendor: "Adidas", sku: "otro" }),
+    ]).applies).toBe(false);
+  });
+
+  it("sin join por condición usa productConditionLogic legacy", () => {
+    const r = rate({
+      productConditionLogic: "or",
+      productConditions: JSON.stringify([
+        { field: "tags", matchMode: "any", values: ["fragil"] },
+        { field: "vendor", matchMode: "any", values: ["nike"] },
+      ]),
+    });
+    expect(evaluateProductCondition(r, [
+      item({ tags: ["otro"], vendor: "Nike" }),
+    ]).applies).toBe(true);
+  });
+
+  it("exclude descarta según el resultado del grupo", () => {
+    const r = rate({
+      productCondition: "exclude",
+      productConditions: JSON.stringify([
+        { field: "tags", matchMode: "any", values: ["fragil"] },
+        { field: "vendor", matchMode: "any", values: ["nike"], join: "and" },
+      ]),
+    });
+    expect(evaluateProductCondition(r, [
+      item({ tags: ["fragil"], vendor: "Nike" }),
+    ]).applies).toBe(false);
+    expect(evaluateProductCondition(r, [
+      item({ tags: ["fragil"], vendor: "Adidas" }),
+    ]).applies).toBe(true);
+  });
+
+  it("exclude + OR oculta si cualquier condición se cumple", () => {
+    const r = rate({
+      productCondition: "exclude",
+      productConditions: JSON.stringify([
+        { field: "tags", matchMode: "any", values: ["fragil"] },
+        { field: "vendor", matchMode: "any", values: ["nike"], join: "or" },
+      ]),
+    });
+    expect(evaluateProductCondition(r, [
+      item({ tags: ["otro"], vendor: "Nike" }),
+    ]).applies).toBe(false);
+    expect(evaluateProductCondition(r, [
+      item({ tags: ["otro"], vendor: "Adidas" }),
+    ]).applies).toBe(true);
+  });
+
+  it("AND con matchMode all exige que todos los items cumplan esa condición", () => {
+    const r = rate({
+      productConditions: JSON.stringify([
+        { field: "tags", matchMode: "all", values: ["fragil"] },
+        { field: "vendor", matchMode: "any", values: ["nike"], join: "and" },
+      ]),
+    });
+    expect(evaluateProductCondition(r, [
+      item({ tags: ["fragil"], vendor: "Adidas" }),
+      item({ tags: ["otro"], vendor: "Nike" }),
+    ]).applies).toBe(false);
+    expect(evaluateProductCondition(r, [
+      item({ tags: ["fragil"], vendor: "Adidas" }),
+      item({ tags: ["fragil"], vendor: "Nike" }),
+    ]).applies).toBe(true);
+  });
+
+  it("condiciones mixtas sin cartProducts → fail-open total", () => {
+    const r = rate({
+      productConditions: JSON.stringify([
+        { field: "tags", matchMode: "any", values: ["fragil"] },
+        { field: "vendor", matchMode: "any", values: ["nike"], join: "and" },
+      ]),
+    });
+    expect(evaluateProductCondition(r, null, ["fragil"]).applies).toBe(true);
+    expect(evaluateProductCondition(
+      rate({ ...r, productCondition: "exclude" }),
+      null,
+      ["fragil"],
+    ).applies).toBe(true);
+  });
+
   it("valores legacy include_tags/exclude_tags siguen funcionando", () => {
     const inc = rate({ productCondition: "include_tags" });
     const exc = rate({ productCondition: "exclude_tags" });

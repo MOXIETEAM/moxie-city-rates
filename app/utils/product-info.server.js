@@ -64,9 +64,24 @@ export async function getProductConditionFields(shop) {
       enabled: true,
       productCondition: { not: "all" },
     },
-    select: { productField: true },
+    select: { productField: true, productConditions: true },
   });
-  const fields = new Set(rates.map((r) => r.productField || "tags"));
+  const fields = new Set();
+  for (const rate of rates) {
+    let conditions = [];
+    try {
+      conditions = JSON.parse(rate.productConditions || "[]");
+    } catch {
+      conditions = [];
+    }
+    const usable = (Array.isArray(conditions) ? conditions : [])
+      .filter((condition) => Array.isArray(condition?.values) && condition.values.some(Boolean));
+    if (usable.length > 0) {
+      for (const condition of usable) fields.add(condition?.field || "tags");
+    } else {
+      fields.add(rate.productField || "tags");
+    }
+  }
   cacheSet(fieldsCache, shop, fields, FIELDS_CACHE_TTL_MS, 2000);
   return fields;
 }
