@@ -2455,7 +2455,28 @@ function generateTemplateCSV(locale) {
     { department: "Antioquia", rate_name: "Envío express", service_type: "mox_express", pricing_mode: "flat", price: "20000", city_condition: "include", cities: "MEDELLÍN,ENVIGADO,SABANETA", description: "Solo área metropolitana", from_time: "08:00", to_time: "18:00", days: "mon,tue,wed,thu,fri", product_condition: "all", delivery_min_days: "1", delivery_max_days: "1", product_field: "tags", product_match_mode: "any", country: "CO", warehouse: "Bodega Medellín", city_aliases: "MEDELLÍN>medallo|medall;ENVIGADO>envig" },
     { department: "Cundinamarca", rate_name: "Envío por peso", service_type: "mox_envio", pricing_mode: "weight_tiers", weight_ranges: "0-5:10000;5-15:20000", city_condition: "all", product_condition: "all", delivery_min_days: "2", delivery_max_days: "5", product_field: "tags", product_match_mode: "any", country: "CO" },
     { department: "Cundinamarca", rate_name: "Gratis desde 200.000", service_type: "mox_envio", pricing_mode: "cart_total", cart_ranges: "0-200000:15000;200000-0:0", city_condition: "all", product_condition: "all", delivery_min_days: "2", delivery_max_days: "5", product_field: "tags", product_match_mode: "any", country: "CO" },
-    { department: "Antioquia", rate_name: "Refrigerado", service_type: "mox_envio", pricing_mode: "flat", price: "25000", city_condition: "all", description: "Cadena de frío", product_condition: "include", product_tags: "congelados", delivery_min_days: "1", delivery_max_days: "2", product_field: "collection", product_match_mode: "all", country: "CO" },
+    {
+      department: "Antioquia",
+      rate_name: "Refrigerado premium",
+      service_type: "mox_envio",
+      pricing_mode: "flat",
+      price: "25000",
+      city_condition: "all",
+      description: "Colección congelados Y marca Premium, O SKU especial",
+      product_condition: "include",
+      product_tags: "congelados",
+      product_field: "collection",
+      product_match_mode: "all",
+      product_conditions: JSON.stringify([
+        { field: "collection", matchMode: "all", values: ["congelados"], join: "and" },
+        { field: "vendor", matchMode: "any", values: ["premium"], join: "and" },
+        { field: "sku", matchMode: "any", values: ["FRIO-001"], join: "or" },
+      ]),
+      product_condition_logic: "and",
+      delivery_min_days: "1",
+      delivery_max_days: "2",
+      country: "CO",
+    },
     { department: "Antioquia", rate_name: "Envío por ítem", service_type: "mox_envio", pricing_mode: "per_item", price: "10000", per_item_price: "2000", city_condition: "all", description: "Primer ítem 10.000 + 2.000 c/u adicional", product_condition: "all", delivery_min_days: "2", delivery_max_days: "4", product_field: "tags", product_match_mode: "any", country: "CO" },
     { department: "Jalisco", rate_name: "Envío MX", service_type: "mox_envio", pricing_mode: "flat", price: "150", city_condition: "all", product_condition: "all", delivery_min_days: "3", delivery_max_days: "6", product_field: "tags", product_match_mode: "any", country: "MX" },
   ];
@@ -2487,8 +2508,8 @@ const CSV_HELP_COLUMNS = [
   { es: "pais", en: "country", values: "ISO-2", example: "CO, MX, BR…" },
   { es: "bodega", en: "warehouse", values: "", example: "Bodega Medellín" },
   { es: "alias_ciudades", en: "city_aliases", values: "CANÓNICA>alias1|alias2;…", example: '"MEDELLÍN>medallo|medell"' },
-  { es: "condiciones_producto", en: "product_conditions", values: "JSON", example: '[{\"field\":\"tags\",\"matchMode\":\"any\",\"values\":[\"fragil\"]}]' },
-  { es: "logica_condiciones_producto", en: "product_condition_logic", values: "and | or", example: "and" },
+  { es: "condiciones_producto", en: "product_conditions", values: "JSON: field, matchMode, values, join", example: '[{"field":"tags","matchMode":"any","values":["fragil"],"join":"and"},{"field":"vendor","matchMode":"any","values":["nike"],"join":"or"}]' },
+  { es: "logica_condiciones_producto", en: "product_condition_logic", values: "and | or (fallback legacy)", example: "and" },
 ];
 
 function CsvHelp({ t, locale }) {

@@ -272,8 +272,8 @@
     "csv_col_18": "Zone country (2-letter code). Empty = your shop country.",
     "csv_col_19": "Origin warehouse (exact Location name). Empty = applies to any origin. Display/scope only, does not force fulfillment.",
     "csv_col_20": "City aliases for checkout matching. Format CANONICAL>alias1|alias2, separate cities with ;",
-    "csv_col_21": "Multiple conditions as JSON. When empty, the simple product columns are used.",
-    "csv_col_22": "How to combine multiple conditions: and = all, or = at least one."
+    "csv_col_21": "Multiple conditions as JSON. Each condition includes field, matchMode, values and join; join defines AND/OR with the previous condition.",
+    "csv_col_22": "Fallback for older files: and = all, or = at least one. Joins inside the JSON take priority."
   },
   "action": {
     "zone_created": "Zone \"{{dept}}\" created and synced",
